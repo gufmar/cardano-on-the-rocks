@@ -39,26 +39,31 @@ Not yet implemented: association portal handoff, guest-portal flow, demo applica
 
 Reserved Ethernet addresses: RockPi 1 `.195`, RockPi 2 `.196`, RockPi 3 `.194`.
 
-## Installation (baseline preparation)
+## Usual setup (one board)
 
-On a RockPi with this repository cloned:
+From a clone on the RockPi (pick the reserved IP for **this** board only):
 
 ```bash
-./scripts/cot-r status          # inspection only
-# Pick THIS board's reserved IP (do not reuse another RockPi's address):
+./scripts/cot-r status
 sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1
-# RockPi 2: ...196 rockpi-2 | RockPi 3: ...194 rockpi-3
-./scripts/cot-r status          # verify
+# RockPi 2: 172.27.213.196 rockpi-2 | RockPi 3: 172.27.213.194 rockpi-3
+# If prepare just added the I2C7 overlay: reboot, then re-run prepare once.
+sudo ./scripts/cot-r oled-test
+sudo ./scripts/cot-r ap-prepare
+sudo ./scripts/cot-r ap-enable --confirm    # short SSH blip possible
+sudo ./scripts/cot-r ap-show-psk            # SSID + PSK + ASCII Wi-Fi QR
+./scripts/cot-r ap-status
+./scripts/cot-r net-status
 ```
 
-If the I²C7 overlay was newly added, reboot once when convenient, then:
+Show credentials again anytime (root):
 
 ```bash
-sudo ./scripts/cot-r prepare    # finish OLED validation after reboot
-sudo ./scripts/cot-r oled-test
+sudo ./scripts/cot-r ap-show-psk          # with QR
+sudo ./scripts/cot-r ap-show-psk --no-qr  # text only
 ```
 
-Details: [docs/provisioning.md](docs/provisioning.md), [docs/oled.md](docs/oled.md).
+Details: [docs/provisioning.md](docs/provisioning.md), [docs/ap-bridging.md](docs/ap-bridging.md), [docs/oled.md](docs/oled.md).
 
 ## Development
 
@@ -123,10 +128,11 @@ sudo ./scripts/cot-r net-set-address 172.27.213.196 rockpi-2
 ./scripts/cot-r ap-status
 sudo ./scripts/cot-r ap-prepare
 sudo ./scripts/cot-r ap-enable --confirm   # short network blip possible
+sudo ./scripts/cot-r ap-show-psk           # SSID + PSK + ASCII Wi-Fi QR
 ./scripts/cot-r ap-status
 ```
 
-See [docs/ap-bridging.md](docs/ap-bridging.md). PSK stays in `/etc/cot-r/ap.psk`.
+See [docs/ap-bridging.md](docs/ap-bridging.md). PSK stays in `/etc/cot-r/ap.psk` (never in git).
 
 ## Management API (after prepare)
 

@@ -17,12 +17,31 @@
 | `rollback` | Yes (needs root) | Reinstall previous recorded commit |
 | `ap-status` | No | Wi-Fi AP / bridge inspection |
 | `ap-prepare` | Yes (needs root) | Install hostapd/iw; generate SSID/PSK/configs |
-| `ap-enable --confirm` | Yes (needs root) | Apply bridged AP netplan + start hostapd |
-| `ap-disable --confirm` | Yes (needs root) | Remove AP bridge; restore Ethernet DHCP |
+| `ap-enable --confirm` | Yes (needs root) | Apply bridged AP + start hostapd |
+| `ap-disable --confirm` | Yes (needs root) | Remove AP bridge; restore Ethernet static |
+| `ap-show-psk` | Mild (needs root) | Print SSID, PSK, and ASCII Wi-Fi QR (`--no-qr` for text) |
+| `net-status` | No | Reserved vs live management IPv4 |
+| `net-set-address` | Yes (needs root) | Set reserved IP and apply static addressing |
 | `version` | No | Print tool and repository version |
 
 Never unexpectedly restarts networking or reboots. If a boot overlay change needs a
 reboot, the script **reports** it and exits successfully after staging the change.
+
+## Usual setup sequence
+
+```bash
+./scripts/cot-r status
+sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1
+# reboot once if I2C7 overlay was newly added, then re-run prepare
+sudo ./scripts/cot-r ap-prepare
+sudo ./scripts/cot-r ap-enable --confirm
+sudo ./scripts/cot-r ap-show-psk    # phone join: scan QR or type SSID/PSK
+./scripts/cot-r ap-status
+./scripts/cot-r net-status
+```
+
+Re-print Wi-Fi credentials later with the same `ap-show-psk` command. PSK file:
+`/etc/cot-r/ap.psk`.
 
 ## What `prepare` does
 
