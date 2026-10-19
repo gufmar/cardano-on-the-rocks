@@ -37,7 +37,8 @@ Do **not** silently switch to a routed/NATed AP design.
 
 ```bash
 ./scripts/cot-r ap-status                 # inspection only
-sudo ./scripts/cot-r ap-show-psk          # print SSID + PSK (root)
+sudo ./scripts/cot-r ap-show-psk          # SSID + PSK + ASCII Wi-Fi QR (root)
+sudo ./scripts/cot-r ap-show-psk --no-qr  # text only
 sudo ./scripts/cot-r ap-prepare           # packages, SSID/PSK, hostapd.conf (no bridge yet)
 sudo ./scripts/cot-r ap-enable --confirm  # write netplan bridge + start hostapd
 sudo ./scripts/cot-r ap-disable --confirm # tear down AP, restore Ethernet DHCP

@@ -2,7 +2,7 @@
 # Bridged Wi-Fi AP (explicit enable/disable; preserves Ethernet DHCP MAC identity).
 # Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
 
-COT_R_AP_PACKAGES=(hostapd iw)
+COT_R_AP_PACKAGES=(hostapd iw python3-qrcode)
 COT_R_HOSTAPD_UNIT="${COT_R_HOSTAPD_UNIT:-cot-r-hostapd.service}"
 COT_R_NETPLAN_AP="${COT_R_NETPLAN_AP:-/etc/netplan/60-cot-r-bridge.yaml}"
 COT_R_AP_ENABLED_FLAG="${COT_R_STATE_DIR}/ap-enabled"
@@ -127,16 +127,61 @@ cot_r_secret_file_status() {
   printf 'missing'
 }
 
+cot_r_print_wifi_qr_ascii() {
+  local ssid="$1"
+  local psk="$2"
+  if ! python3 -c 'import qrcode' >/dev/null 2>&1; then
+    cot_r_warn "python3-qrcode not installed; skip ASCII QR (apt install python3-qrcode or re-run ap-prepare)"
+    return 0
+  fi
+  python3 - "$ssid" "$psk" <<'PY'
+import sys
+import qrcode
+
+def wifi_escape(value: str) -> str:
+    # WIFI: QR / MeCard specials
+    out = []
+    for ch in value:
+        if ch in ("\\", ";", ",", '"', ":"):
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+ssid, psk = sys.argv[1], sys.argv[2]
+payload = f"WIFI:T:WPA;S:{wifi_escape(ssid)};P:{wifi_escape(psk)};H:false;;"
+qr = qrcode.QRCode(
+    error_correction=qrcode.constants.ERROR_CORRECT_M,
+    border=1,
+    box_size=1,
+)
+qr.add_data(payload)
+qr.make(fit=True)
+print("WIFI_QR_PAYLOAD=" + payload)
+print("--- scan with phone camera / Wi-Fi QR reader ---")
+# invert=True tends to scan better on light terminal backgrounds
+qr.print_ascii(invert=True)
+print("--- end QR ---")
+PY
+}
+
 cot_r_cmd_ap_show_psk() {
   require_root
   cot_r_ap_load_env
-  local ssid psk
+  local ssid psk no_qr=0
+  if [[ "${1:-}" == "--no-qr" ]]; then
+    no_qr=1
+  fi
   ssid="$(cot_r_default_ssid)"
   [[ -s "${COT_R_AP_PSK_FILE}" ]] || die "Missing ${COT_R_AP_PSK_FILE}; run sudo ./scripts/cot-r ap-prepare"
   psk="$(tr -d '[:space:]' <"${COT_R_AP_PSK_FILE}")"
   echo "SSID=${ssid}"
   echo "PSK=${psk}"
   echo "file=${COT_R_AP_PSK_FILE}"
+  if [[ "$no_qr" -eq 0 ]]; then
+    echo
+    cot_r_print_wifi_qr_ascii "$ssid" "$psk"
+  fi
 }
 
 cot_r_cmd_ap_status() {

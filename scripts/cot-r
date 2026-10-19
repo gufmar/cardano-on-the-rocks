@@ -49,7 +49,7 @@ Commands:
   update [ref]    Fetch/checkout deploy clone and install runtime (root)
   rollback        Reinstall previous recorded commit (root)
   ap-status       Inspect Wi-Fi AP capability and bridge state (no changes)
-  ap-show-psk     Print AP SSID and PSK (requires root)
+  ap-show-psk     Print AP SSID, PSK, and ASCII Wi-Fi QR (root; --no-qr for text only)
   ap-prepare      Install hostapd/iw, generate SSID/PSK/configs (root; no bridge yet)
   ap-enable       Apply bridged AP (requires --confirm; may briefly blip SSH)
   ap-disable      Remove bridge AP and restore Ethernet DHCP (requires --confirm)
@@ -98,7 +98,7 @@ main() {
       cot_r_cmd_ap_status
       ;;
     ap-show-psk|ap_show_psk|ap-credentials)
-      cot_r_cmd_ap_show_psk
+      cot_r_cmd_ap_show_psk "$@"
       ;;
     ap-prepare|ap_prepare)
       cot_r_cmd_ap_prepare
