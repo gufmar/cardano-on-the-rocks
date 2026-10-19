@@ -69,7 +69,9 @@ COT_R_DISPLAY_MAX_FPS=10
 COT_R_DISPLAY_ORIENTATION=0
 EOF
   chmod 0640 "$conf"
-  chown "root:${COT_R_DISPLAY_USER}" "$conf" 2>/dev/null || chown "root:${COT_R_I2C_GROUP}" "$conf" || true
+  # Readable by display and management (group cot-r via /etc/cot-r dir group).
+  chown "root:${COT_R_DEPLOY_USER}" "$conf" 2>/dev/null || \
+    chown "root:${COT_R_DISPLAY_USER}" "$conf" 2>/dev/null || true
   cot_r_manifest_add_file "$conf" "config"
   cot_r_ok "Wrote ${conf} (bus=${bus} addr=${addr})"
 }

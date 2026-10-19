@@ -70,6 +70,15 @@ cot_r_cmd_status() {
   else
     cot_r_warn "wlan0 not present"
   fi
+  if command -v iw >/dev/null 2>&1; then
+    if iw phy 2>/dev/null | grep -q '\* AP$'; then
+      cot_r_ok "Wi-Fi PHY advertises AP mode (iw)"
+    else
+      cot_r_warn "Wi-Fi PHY AP mode not clearly advertised by iw (inspect before enabling AP)"
+    fi
+  else
+    echo "iw: not installed (optional; useful before AP stage)"
+  fi
   if ss -tln 2>/dev/null | grep -qE ':22\s'; then
     cot_r_ok "SSH appears to be listening on :22"
   else
@@ -111,14 +120,50 @@ cot_r_cmd_status() {
     echo "manifest: (not created; run prepare)"
   fi
   if systemctl list-unit-files "${COT_R_DISPLAY_UNIT}" >/dev/null 2>&1; then
-    echo "display unit: $(systemctl is-enabled "${COT_R_DISPLAY_UNIT}" 2>/dev/null || echo n/a) / $(systemctl is-active "${COT_R_DISPLAY_UNIT}" 2>/dev/null || echo n/a)"
+    echo "display unit: $(systemctl is-enabled "${COT_R_DISPLAY_UNIT}" 2>/dev/null || true) / $(systemctl is-active "${COT_R_DISPLAY_UNIT}" 2>/dev/null || true)"
   else
     echo "display unit: not installed"
+  fi
+  if systemctl list-unit-files "${COT_R_MGMT_UNIT}" >/dev/null 2>&1; then
+    echo "mgmt unit:    $(systemctl is-enabled "${COT_R_MGMT_UNIT}" 2>/dev/null || true) / $(systemctl is-active "${COT_R_MGMT_UNIT}" 2>/dev/null || true)"
+  else
+    echo "mgmt unit:    not installed"
   fi
   if getent passwd "${COT_R_DISPLAY_USER}" >/dev/null 2>&1; then
     cot_r_ok "User ${COT_R_DISPLAY_USER} exists"
   else
     echo "user ${COT_R_DISPLAY_USER}: not created"
+  fi
+  if getent passwd "${COT_R_DEPLOY_USER}" >/dev/null 2>&1; then
+    cot_r_ok "User ${COT_R_DEPLOY_USER} exists"
+  else
+    echo "user ${COT_R_DEPLOY_USER}: not created"
+  fi
+  if [[ -f "${COT_R_ETC_DIR}/device.id" ]]; then
+    echo "device.id: present"
+  else
+    echo "device.id: missing"
+  fi
+  if [[ -s "${COT_R_API_TOKEN_FILE}" ]]; then
+    echo "api.token: present (not shown)"
+  else
+    echo "api.token: missing"
+  fi
+  if curl -fsS --max-time 2 http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1; then
+    cot_r_ok "Management health endpoint responds on :8080"
+  else
+    echo "management /api/v1/health: not reachable"
+  fi
+  echo
+
+  echo "=== Deploy ==="
+  echo "dev clone:    ${COT_R_REPO_ROOT}"
+  echo "deploy clone: ${COT_R_DEPLOY_CLONE}"
+  if [[ -d "${COT_R_DEPLOY_CLONE}/.git" ]]; then
+    echo "deploy HEAD:  $(git -C "${COT_R_DEPLOY_CLONE}" rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  if [[ -f "${COT_R_DEPLOY_INFO}" ]] && command -v jq >/dev/null 2>&1; then
+    jq '{commit, ref, previous_commit, deployed_at}' "${COT_R_DEPLOY_INFO}" 2>/dev/null || true
   fi
   echo
 

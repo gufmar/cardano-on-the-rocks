@@ -13,11 +13,16 @@ onboarding platform for Cardano-related demonstrations on Armbian (AArch64).
 
 ## Current status
 
-This repository is being built **incrementally**. The first milestone is a reproducible
-Bash system-preparation and reset workflow, plus an OLED display foundation.
+Incremental build. Working on RockPi 2 today:
 
-Not yet implemented: peer coordination, bridged AP onboarding, RouterOS automation,
-captive portal handoff, and the demo application itself.
+- Bash prepare / status / project reset
+- OLED display service (Unix socket)
+- Deployment user + `/opt/cot-r/src` clone with update/rollback
+- Management API with identity, boot ID, status, and demo reset
+
+Next: bridged AP onboarding, peer coordination, RouterOS uplink control, local UI.
+
+Not yet implemented: association portal handoff, guest-portal flow, demo application.
 
 ## Hardware
 
@@ -95,6 +100,19 @@ If software fails but the OS and network remain:
 There is no remote recovery after a failed OS, power loss with corrupt storage, or a
 broken Layer-2 path; use console/physical access in those cases.
 
+## Management API (after prepare)
+
+```bash
+TOKEN=$(sudo cat /etc/cot-r/api.token)
+# Use -sS so connection errors are visible (plain -s hides them).
+curl -sS --fail-with-body http://127.0.0.1:8080/api/v1/health; echo
+curl -sS --fail-with-body -H "Authorization: Bearer $TOKEN" \
+  http://127.0.0.1:8080/api/v1/status; echo
+curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"scope":"demo"}' \
+  http://127.0.0.1:8080/api/v1/reset; echo
+```
+
 ## Documentation
 
 | Doc | Topic |
@@ -103,6 +121,8 @@ broken Layer-2 path; use console/physical access in those cases.
 | [docs/networking.md](docs/networking.md) | LAN, mAP, AP bridging plans |
 | [docs/oled.md](docs/oled.md) | I²C7, display service, QR limits |
 | [docs/provisioning.md](docs/provisioning.md) | Prepare / reset behaviour |
+| [docs/deployment.md](docs/deployment.md) | Deploy user, update, rollback |
+| [docs/ap-bridging.md](docs/ap-bridging.md) | Planned bridged AP design |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 

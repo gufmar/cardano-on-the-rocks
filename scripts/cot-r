@@ -3,12 +3,9 @@
 # Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
 #
 # Usage:
-#   cot-r status
-#   cot-r prepare
-#   cot-r reset-project
-#   cot-r oled-test
-#   cot-r version
-#   cot-r help
+#   cot-r status | prepare | reset-project | oled-test
+#   cot-r deploy-status | update [ref] | rollback
+#   cot-r version | help
 
 set -euo pipefail
 
@@ -30,6 +27,8 @@ source "${COT_R_LIB_DIR}/users.sh"
 source "${COT_R_LIB_DIR}/oled_hw.sh"
 # shellcheck source=lib/services.sh
 source "${COT_R_LIB_DIR}/services.sh"
+# shellcheck source=lib/deploy.sh
+source "${COT_R_LIB_DIR}/deploy.sh"
 # shellcheck source=lib/prepare.sh
 source "${COT_R_LIB_DIR}/prepare.sh"
 
@@ -37,15 +36,21 @@ usage() {
   cat <<'EOF'
 Cardano on the Rocks: provisioning helper
 
-Usage: cot-r <command>
+Usage: cot-r <command> [args]
 
 Commands:
   status          Inspect platform, network, I2C, and project state (no changes)
   prepare         Idempotent baseline preparation (requires root)
   reset-project   Stop project services, remove project-owned install, re-prepare (root)
   oled-test       Discover SSD1306 and render a short test pattern
+  deploy-status   Show deployment clone and recorded commit
+  update [ref]    Fetch/checkout deploy clone and install runtime (root)
+  rollback        Reinstall previous recorded commit (root)
   version         Print tool version
   help            Show this help
+
+Demo reset (clears session only) is the management API:
+  POST /api/v1/reset   Authorization: Bearer <token from /etc/cot-r/api.token>
 
 Source: https://github.com/gufmar/cardano-on-the-rocks
 Licence: AGPL-3.0-only
@@ -53,12 +58,13 @@ Licence: AGPL-3.0-only
 Notes:
   - Never reboots or restarts networking by itself.
   - If the I2C7 overlay is newly staged, reboot when convenient, then re-run prepare.
-  - Demo reset (REST) is separate and not handled here.
+  - Development clone and deploy clone (/opt/cot-r/src) are separate.
 EOF
 }
 
 main() {
   local cmd="${1:-help}"
+  shift || true
   case "$cmd" in
     status|inspect)
       cot_r_cmd_status
@@ -71,6 +77,15 @@ main() {
       ;;
     oled-test|oled_test)
       cot_r_cmd_oled_test
+      ;;
+    deploy-status|deploy_status)
+      cot_r_cmd_deploy_status
+      ;;
+    update)
+      cot_r_cmd_update "$@"
+      ;;
+    rollback)
+      cot_r_cmd_rollback
       ;;
     version|--version|-V)
       echo "cot-r $(cot_r_version)"

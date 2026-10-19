@@ -12,6 +12,9 @@
 | `prepare` | Yes (needs root) | Idempotent baseline preparation |
 | `reset-project` | Yes (needs root) | Remove project-owned install, restore tracked changes, re-prepare |
 | `oled-test` | Mild | Probe bus and optionally draw a test pattern (needs prepared OLED) |
+| `deploy-status` | No | Show deploy clone and recorded commit |
+| `update [ref]` | Yes (needs root) | Fetch/checkout deploy clone and install runtime |
+| `rollback` | Yes (needs root) | Reinstall previous recorded commit |
 | `version` | No | Print tool and repository version |
 
 Never unexpectedly restarts networking or reboots. If a boot overlay change needs a
@@ -62,7 +65,9 @@ is **not** deleted by `reset-project` unless an explicit flag is used later.
 | User | Purpose |
 |---|---|
 | `cot-r-display` | Runs the OLED service (supplementary group for I²C access) |
-| `cot-r` (later) | Deployment / management service user |
+| `cot-r` | Deployment / management service user |
+
+See also [deployment.md](deployment.md).
 
 Existing administrative users (for example `mgu`) and SSH access are preserved.
 

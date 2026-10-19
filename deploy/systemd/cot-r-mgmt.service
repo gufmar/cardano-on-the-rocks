@@ -1,0 +1,31 @@
+[Unit]
+Description=Cardano on the Rocks management API
+Documentation=https://github.com/gufmar/cardano-on-the-rocks
+After=network-online.target cot-r-display.service
+Wants=network-online.target
+# Display is optional; management must survive without OLED.
+
+[Service]
+Type=simple
+User=cot-r
+Group=cot-r
+EnvironmentFile=-/etc/cot-r/device.env
+EnvironmentFile=-/etc/cot-r/mgmt.env
+Environment=COT_R_ETC_DIR=/etc/cot-r
+Environment=COT_R_STATE_DIR=/var/lib/cot-r
+Environment=COT_R_RUN_DIR=/run/cot-r
+Environment=COT_R_DISPLAY_SOCKET=/run/cot-r/display.sock
+Environment=COT_R_API_TOKEN_FILE=/etc/cot-r/api.token
+Environment=COT_R_MGMT_BIND=0.0.0.0
+Environment=COT_R_MGMT_PORT=8080
+ExecStart=/usr/bin/python3 /opt/cot-r/mgmt/cot_r_mgmt/server.py
+Restart=on-failure
+RestartSec=3
+Nice=5
+MemoryMax=96M
+TasksMax=64
+# /run/cot-r comes from cot-r-display RuntimeDirectory when that unit is up.
+SupplementaryGroups=i2c
+
+[Install]
+WantedBy=multi-user.target

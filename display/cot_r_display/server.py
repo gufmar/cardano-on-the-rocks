@@ -160,8 +160,8 @@ class DisplayServer:
         # Show boot splash (or null)
         self.enqueue(
             text_lines(
-                ["Cardano Rocks", "display ready", SOURCE_URL.split("//", 1)[-1][:21]],
-                ttl_ms=5000,
+                ["Cardano Rocks", "default setup ready."],
+                ttl_ms=8000,
             )
         )
         worker = threading.Thread(target=self._worker, name="display-worker", daemon=True)

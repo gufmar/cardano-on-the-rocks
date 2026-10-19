@@ -12,6 +12,7 @@ COT_R_BASE_PACKAGES=(
   curl
   jq
   git
+  rsync
 )
 
 # OLED / display foundation (Debian trixie names verified on this host).

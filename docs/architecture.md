@@ -29,12 +29,14 @@ hints, not trust.
 
 | Component | Role | Stage |
 |---|---|---|
-| `scripts/cot-r` | System preparation, status, project reset | Milestone 1 |
-| Display service | Sole owner of OLED hardware; local API | Milestone 1 |
-| Management service | Identity, state machine, demo reset API | Later |
-| Bridged AP + portal | Onboarding SSID and captive handoff | Later |
+| `scripts/cot-r` | System preparation, status, project reset, update | Done |
+| Display service | Sole owner of OLED hardware; local API | Done |
+| Management service | Identity, boot ID, state, demo reset API | Done (foundation) |
+| Deploy clone + update | `/opt/cot-r/src`, rollback via `deploy.json` | Done (foundation) |
+| Bridged AP + portal | Onboarding SSID and captive handoff | Next |
 | Peer coordination | Coordinator lease, heartbeats | Later |
 | RouterOS client | Uplink scan/configure (backend only) | Later |
+| Local setup UI | Responsive offline page | Later |
 | Demo application | Cardano demo after foundations | Later |
 
 ## Process isolation
@@ -44,18 +46,33 @@ hints, not trust.
 - Only one process owns `/dev/i2c-*` for the OLED.
 - Management survives demo-application failure; demo reset must not depend on the demo process.
 
-## State model (planned)
+## State model
 
 States: `Initial` → `Waiting` → `Configuring` → `Ready`, with `Recovery` and `Resetting`.
 
-Each management start generates a fresh **boot ID**. Controllers must treat a restarted
-peer as needing deliberate reprovisioning even if the IP is unchanged.
+Each management start generates a fresh **boot ID** under `/run/cot-r/boot.id`.
+Controllers must treat a restarted peer as needing deliberate reprovisioning even if
+the IP is unchanged. Durable device id lives in `/etc/cot-r/device.id`.
+
+Ended demo sessions are recorded so stale peers cannot resurrect an old controller
+session after reset.
+
+## Management API (foundation)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/v1/health` | no | Liveness |
+| GET | `/api/v1/status` | Bearer | Identity, boot ID, state, deploy commit |
+| GET | `/api/v1/about` | Bearer | Attribution and licence |
+| POST | `/api/v1/reset` | Bearer | Demo reset (`scope=demo` only) |
+
+Default listen: `0.0.0.0:8080`. Token: `/etc/cot-r/api.token`.
 
 ## Reset scopes
 
 | Reset | Effect |
 |---|---|
-| **Demo reset** (`POST /api/v1/reset`, later) | Clear demo session / disposable app config; keep management, network identity, AP credentials, peer trust, router credentials |
+| **Demo reset** (`POST /api/v1/reset`) | Clear demo session / disposable app config; keep management, network identity, AP credentials, peer trust, router credentials |
 | **Project reset** (`cot-r reset-project`) | Stop project services; remove project-owned app bits; restore tracked system changes; reapply baseline preparation |
 | **Identity reprovision** (explicit, separate) | Full wipe of durable identity/recovery credentials when intentionally requested |
 
