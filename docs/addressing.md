@@ -18,15 +18,27 @@ Cursor/SSH then still targets the old reserved IP and fails.
 
 Configured in `/etc/cot-r/device.env` as `COT_R_RESERVED_IPV4` (plus gateway/DNS/prefix).
 
+**Never copy another board's `device.env`.** A shared example must not assign `.196`
+to every RockPi (that caused an IP clash when preparing RockPi 1).
+
+Identity is resolved at `prepare` time, in order:
+
+1. `sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1`
+2. MAC map `/etc/cot-r/device-macs.map` (from `config/templates/device-macs.map.example`)
+3. Existing `device.env` (interactive confirm when MAC is not in the map)
+4. Interactive menu (TTY) choosing `.195` / `.196` / `.194`
+
 - **AP enabled:** static address on `br0` (MAC still = `end0` permanent MAC).
 - **AP disabled:** static address on `end0` via `00-cot-r-end0-static.network`.
 
-SSID suffix uses the **reserved** address (`.196`), not whatever dynamic lease last appeared.
+SSID suffix uses the **reserved** address, not whatever dynamic lease last appeared.
 
 ## Commands
 
 ```bash
 ./scripts/cot-r net-status
+cat /sys/class/net/end0/address   # add this MAC to device-macs.map
+sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1
 sudo ./scripts/cot-r net-set-address 172.27.213.196 rockpi-2
 # if AP is already on:
 sudo ./scripts/cot-r ap-enable --confirm

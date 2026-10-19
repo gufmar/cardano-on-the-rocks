@@ -159,6 +159,16 @@ cot_r_cmd_status() {
   else
     echo "api.token: missing"
   fi
+  if [[ -s "${COT_R_PEER_TOKEN_FILE}" ]]; then
+    echo "peer.token: present (not shown)"
+  else
+    echo "peer.token: missing"
+  fi
+  if [[ -f "${COT_R_SUDOERS_DEST}" ]]; then
+    echo "sudoers: ${COT_R_SUDOERS_DEST} present"
+  else
+    echo "sudoers: ${COT_R_SUDOERS_DEST} missing"
+  fi
   if curl -fsS --max-time 2 http://127.0.0.1:8080/api/v1/health >/dev/null 2>&1; then
     cot_r_ok "Management health endpoint responds on :8080"
   else

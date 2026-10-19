@@ -1,0 +1,6 @@
+# Allow cot-r management to standby/resume the local AP without a full shell.
+# Installed by prepare to /etc/sudoers.d/cot-r-mgmt (mode 0440).
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+
+cot-r ALL=(root) NOPASSWD: /usr/bin/systemctl stop cot-r-hostapd.service
+cot-r ALL=(root) NOPASSWD: /usr/bin/systemctl start cot-r-hostapd.service

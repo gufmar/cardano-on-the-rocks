@@ -1,0 +1,15 @@
+# Map permanent end0 MAC -> reserved management IPv4 and device label.
+# Installed to /etc/cot-r/device-macs.map by prepare if missing (edit on each site).
+# Lines: <mac> <ipv4> <device-id>
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+#
+# Fill in RockPi 1 and RockPi 3 after reading: cat /sys/class/net/end0/address
+#
+# RockPi 2 (dev node, verified):
+6e:37:f1:0f:4c:c6 172.27.213.196 rockpi-2
+#
+# RockPi 1 (example; replace MAC before relying on auto-assign):
+# aa:bb:cc:dd:ee:01 172.27.213.195 rockpi-1
+#
+# RockPi 3 (example; replace MAC before relying on auto-assign):
+# aa:bb:cc:dd:ee:03 172.27.213.194 rockpi-3

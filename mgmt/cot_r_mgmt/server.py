@@ -3,15 +3,22 @@
 """Authenticated management HTTP API (stdlib only).
 
 Endpoints:
-  GET  /api/v1/health   (no auth)  liveness
-  GET  /api/v1/status   (auth)     identity + state
-  GET  /api/v1/about    (auth)     attribution / licence
-  POST /api/v1/reset    (auth)     demo reset (not project cleanup)
+  GET  /api/v1/health        (no auth)   liveness
+  GET  /api/v1/status        (api auth)  identity + state
+  GET  /api/v1/about         (api auth)  attribution / licence
+  GET  /api/v1/peers         (api auth)  discovery snapshot
+  POST /api/v1/setup/claim   (api auth)  become coordinator + announce
+  POST /api/v1/reset         (api auth)  demo reset (not project cleanup)
+  GET  /api/v1/peer/hello    (peer auth) peer identity exchange
+  POST /api/v1/peer/claim    (peer auth) accept coordinator claim
+  POST /api/v1/peer/heartbeat(peer auth) refresh peer lease
+  POST /api/v1/peer/release  (peer auth) session ended / leave Waiting
 
 Environment:
   COT_R_MGMT_BIND=0.0.0.0
   COT_R_MGMT_PORT=8080
   COT_R_API_TOKEN_FILE=/etc/cot-r/api.token
+  COT_R_PEER_TOKEN_FILE=/etc/cot-r/peer.token
   COT_R_DEPLOY_INFO=/var/lib/cot-r/deploy.json
 """
 
@@ -38,6 +45,7 @@ from cot_r_mgmt import API_VERSION, SOURCE_URL, __version__  # noqa: E402
 from cot_r_mgmt import auth as authmod  # noqa: E402
 from cot_r_mgmt import display_client  # noqa: E402
 from cot_r_mgmt import identity  # noqa: E402
+from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
 from cot_r_mgmt.state import StateStore  # noqa: E402
 
 logging.basicConfig(
@@ -66,14 +74,22 @@ class AppContext:
         self.boot_id = identity.new_boot_id()
         self.store = StateStore()
         self.token = authmod.load_token() or authmod.ensure_token()
-        # If we just created token as non-root it may fail; prepare should create it.
         self.token = authmod.load_token()
+        self.peer_token = authmod.load_peer_token()
+        self.coord = CoordinatorService(
+            store=self.store,
+            device_id=self.device_id,
+            device_label=self.device_label,
+            boot_id=self.boot_id,
+            peer_token=self.peer_token,
+        )
         log.info(
-            "boot device_id=%s label=%s boot_id=%s state=%s",
+            "boot device_id=%s label=%s boot_id=%s state=%s peer_token=%s",
             self.device_id,
             self.device_label,
             self.boot_id,
             self.store.snapshot().get("device_state"),
+            "yes" if self.peer_token else "missing",
         )
 
 
@@ -114,10 +130,21 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         log.info("%s - " + fmt, self.address_string(), *args)
 
-    def _require_auth(self) -> bool:
+    def _require_api_auth(self) -> bool:
         assert CTX is not None
         provided = authmod.extract_bearer(self.headers.get("Authorization"))
         if authmod.token_ok(provided, CTX.token):
+            return True
+        _json_response(self, 401, {"ok": False, "error": "unauthorized"})
+        return False
+
+    def _require_peer_auth(self) -> bool:
+        assert CTX is not None
+        if not CTX.peer_token:
+            _json_response(self, 503, {"ok": False, "error": "peer token not configured"})
+            return False
+        provided = authmod.extract_bearer(self.headers.get("Authorization"))
+        if authmod.token_ok(provided, CTX.peer_token):
             return True
         _json_response(self, 401, {"ok": False, "error": "unauthorized"})
         return False
@@ -126,6 +153,7 @@ class Handler(BaseHTTPRequestHandler):
         assert CTX is not None
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path == "/api/v1/health":
+            st = CTX.store.snapshot()
             _json_response(
                 self,
                 200,
@@ -134,11 +162,13 @@ class Handler(BaseHTTPRequestHandler):
                     "api": API_VERSION,
                     "version": __version__,
                     "boot_id": CTX.boot_id,
+                    "state": st.get("device_state"),
+                    "role": st.get("role"),
                 },
             )
             return
         if path == "/api/v1/status":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             st = CTX.store.snapshot()
             deploy = _load_deploy_info()
@@ -154,9 +184,12 @@ class Handler(BaseHTTPRequestHandler):
                     "device_label": CTX.device_label,
                     "boot_id": CTX.boot_id,
                     "state": st.get("device_state"),
+                    "role": st.get("role"),
                     "session_id": st.get("session_id"),
                     "config_generation": st.get("config_generation"),
                     "coordinator_id": st.get("coordinator_id"),
+                    "lease_expires_at": st.get("lease_expires_at"),
+                    "peer_acks": st.get("peer_acks"),
                     "updated_at": st.get("updated_at"),
                     "deploy": {
                         "commit": deploy.get("commit"),
@@ -168,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/v1/about":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             _json_response(
                 self,
@@ -187,13 +220,102 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/v1/peers":
+            if not self._require_api_auth():
+                return
+            found = CTX.coord.discover()
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "peers": found,
+                    "peer_token_configured": bool(CTX.peer_token),
+                },
+            )
+            return
+        if path == "/api/v1/peer/hello":
+            if not self._require_peer_auth():
+                return
+            _json_response(self, 200, CTX.coord.hello_payload())
+            return
         _json_response(self, 404, {"ok": False, "error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
         assert CTX is not None
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/api/v1/setup/claim":
+            if not self._require_api_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            if not CTX.peer_token:
+                _json_response(
+                    self,
+                    503,
+                    {
+                        "ok": False,
+                        "error": "peer.token missing; copy shared peer token to all boards",
+                    },
+                )
+                return
+            result = CTX.coord.claim_local()
+            snap = result["state"]
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "role": "coordinator",
+                    "state": snap.get("device_state"),
+                    "session_id": snap.get("session_id"),
+                    "config_generation": snap.get("config_generation"),
+                    "lease_expires_at": snap.get("lease_expires_at"),
+                    "device_id": CTX.device_id,
+                    "boot_id": CTX.boot_id,
+                    "peer_acks": result.get("peer_acks"),
+                },
+            )
+            return
+        if path == "/api/v1/peer/claim":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            result = CTX.coord.handle_remote_claim(body)
+            code = 200 if result.get("ok") else 409
+            _json_response(self, code, result)
+            return
+        if path == "/api/v1/peer/heartbeat":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            result = CTX.coord.handle_heartbeat(body)
+            code = 200 if result.get("ok") else 409
+            _json_response(self, code, result)
+            return
+        if path == "/api/v1/peer/release":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            result = CTX.coord.handle_release(body)
+            _json_response(self, 200, result)
+            return
         if path == "/api/v1/reset":
-            if not self._require_auth():
+            if not self._require_api_auth():
                 return
             body, err = _read_json(self)
             if err:
@@ -211,8 +333,13 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            # Acknowledge before disruptive work where practical: build response after
-            # durable state write (fast), then notify display asynchronously.
+            # If we are coordinator, notify peers before clearing local session.
+            peer_results: list = []
+            st_before = CTX.store.snapshot()
+            if st_before.get("role") == "coordinator":
+                peer_results = CTX.coord.broadcast_release(
+                    reason=str(body.get("reason") or "api_reset")
+                )
             result = CTX.store.demo_reset(reason=str(body.get("reason") or "api_reset"))
             op_id = result.get("operation_id")
             _json_response(
@@ -228,6 +355,7 @@ class Handler(BaseHTTPRequestHandler):
                     "boot_id": CTX.boot_id,
                     "device_id": CTX.device_id,
                     "ended_session": result.get("ended_session"),
+                    "peer_releases": peer_results,
                 },
             )
             threading.Thread(target=display_client.show_reset_notice, daemon=True).start()
@@ -236,8 +364,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _lease_ipv4() -> str:
-    """Best-effort management IPv4 for OLED splash (prefer end0, then br0)."""
-    for ifname in ("end0", "br0"):
+    """Best-effort management IPv4 for OLED splash (prefer br0, then end0)."""
+    for ifname in ("br0", "end0"):
         try:
             out = subprocess.check_output(
                 ["ip", "-4", "-o", "addr", "show", "dev", ifname],
@@ -262,18 +390,25 @@ def main() -> int:
     if not CTX.token:
         log.error("API token missing at %s; run sudo ./scripts/cot-r prepare", authmod.TOKEN_FILE)
         return 1
+    if not CTX.peer_token:
+        log.warning(
+            "peer token missing at %s; peer coordination disabled until prepared",
+            authmod.PEER_TOKEN_FILE,
+        )
 
     display_client.show_text(
         ["Cardano Rocks", "default setup ready.", _lease_ipv4()],
         priority=50,
         ttl_ms=8000,
     )
+    CTX.coord.start()
 
     httpd = ThreadingHTTPServer((bind, port), Handler)
     httpd.daemon_threads = True
 
     def _stop(*_a):
         log.info("shutdown requested")
+        CTX.coord.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _stop)
@@ -282,6 +417,7 @@ def main() -> int:
     try:
         httpd.serve_forever(poll_interval=0.5)
     finally:
+        CTX.coord.stop()
         httpd.server_close()
     return 0
 

@@ -4,7 +4,9 @@
 
 cot_r_cmd_prepare() {
   local reboot_line reboot_needed=no
+  local identity_ok=no
   require_root
+  cot_r_parse_prepare_identity_args "$@"
   cot_r_init_logging
   cot_r_info "Starting prepare (idempotent)"
   cot_r_ensure_state_dirs
@@ -30,9 +32,16 @@ cot_r_cmd_prepare() {
   cot_r_install_config_templates
   cot_r_ensure_device_id_file
   cot_r_ensure_api_token
+  cot_r_ensure_peer_token
+  cot_r_install_mgmt_sudoers
   cot_r_fix_etc_permissions
+  # Resolve THIS board's reserved IP before any static network write.
+  # Never invent .196 from a shared example template.
+  if cot_r_ensure_device_identity; then
+    identity_ok=yes
+  fi
   # If a concrete reserved address is configured and AP is off, prefer static end0.
-  if [[ ! -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
+  if [[ "$identity_ok" == "yes" && ! -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
     if cot_r_reserved_ipv4 >/dev/null 2>&1; then
       cot_r_write_end0_static_networkd
       networkctl reload 2>/dev/null || true
@@ -93,6 +102,11 @@ PY
   echo
   cot_r_ok "Prepare completed"
   echo "Completed steps: snapshot, packages, users/udev/identity, overlay, display, management, deploy clone"
+  if reserved="$(cot_r_reserved_ipv4 2>/dev/null)"; then
+    echo "Reserved management IP: ${reserved} (device.env + static addressing)"
+  else
+    cot_r_warn "Reserved IP unset; static addressing skipped"
+  fi
   echo "Management API: http://<device>:8080/api/v1/  (token in ${COT_R_API_TOKEN_FILE})"
   if [[ "$reboot_needed" == "yes" ]]; then
     cot_r_warn "ACTION REQUIRED: reboot this device when convenient, then re-run: sudo ./scripts/cot-r prepare"
@@ -104,6 +118,7 @@ PY
 
 cot_r_cmd_reset_project() {
   require_root
+  # Identity flags (e.g. --reserved-ipv4) are forwarded to the re-prepare step.
   cot_r_init_logging
   cot_r_info "Starting project reset (not an OS reinstall)"
   cot_r_ensure_state_dirs
@@ -156,18 +171,18 @@ cot_r_cmd_reset_project() {
   done
   systemctl daemon-reload
 
-  # Clear disposable management demo state; keep device.id and api.token by default
+  # Clear disposable management demo state; keep device.id, api.token, peer.token
   if [[ -f "${COT_R_STATE_DIR}/mgmt-state.json" ]]; then
     backup_file "${COT_R_STATE_DIR}/mgmt-state.json" >/dev/null
     rm -f "${COT_R_STATE_DIR}/mgmt-state.json"
   fi
 
   # Do NOT remove: admin users, SSH keys, ethernet config, development clones,
-  # deploy clone, armbianEnv overlays, device.id, api.token, baseline apt packages.
-  # Identity wipe is a separate future operation.
+  # deploy clone, armbianEnv overlays, device.id, api.token, peer.token,
+  # sudoers, baseline apt packages. Identity wipe is a separate future operation.
 
   cot_r_info "Re-applying baseline prepare"
-  cot_r_cmd_prepare
+  cot_r_cmd_prepare "$@"
 
   cot_r_ok "Project reset finished; baseline reapplied"
   cot_r_info "Preserved: OS, unrelated packages, admin users, SSH, Ethernet, git clones, identity/token, I2C overlay"

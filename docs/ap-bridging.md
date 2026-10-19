@@ -109,6 +109,6 @@ SSID/PSK/setup-URL fallback screen if the QR cannot encode reliably.
 
 ## Next after AP works
 
-- Peer coordination (peers hide QR / disable AP after coordinator ack)
+- Peer coordination (peers hide QR / disable AP after coordinator ack) — see [peers.md](peers.md)
 - Association reporting for portal handoff
 - Local setup UI + Wi-Fi QR on OLED (with readable fallback)

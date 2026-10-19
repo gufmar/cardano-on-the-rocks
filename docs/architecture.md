@@ -34,7 +34,7 @@ hints, not trust.
 | Management service | Identity, boot ID, state, demo reset API | Done (foundation) |
 | Deploy clone + update | `/opt/cot-r/src`, rollback via `deploy.json` | Done (foundation) |
 | Bridged AP (`ap-prepare` / `ap-enable`) | Bridge wlan0 to end0; mAP DHCP | Done (foundation) |
-| Peer coordination | Coordinator lease, heartbeats | Next |
+| Peer coordination | Coordinator lease, heartbeats | Done (foundation) |
 | Portal handoff + local UI | Association map + setup page | Later |
 | RouterOS client | Uplink scan/configure (backend only) | Later |
 | Local setup UI | Responsive offline page | Later |
@@ -58,16 +58,26 @@ the IP is unchanged. Durable device id lives in `/etc/cot-r/device.id`.
 Ended demo sessions are recorded so stale peers cannot resurrect an old controller
 session after reset.
 
-## Management API (foundation)
+## Management API (foundation + peers)
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/v1/health` | no | Liveness |
-| GET | `/api/v1/status` | Bearer | Identity, boot ID, state, deploy commit |
-| GET | `/api/v1/about` | Bearer | Attribution and licence |
-| POST | `/api/v1/reset` | Bearer | Demo reset (`scope=demo` only) |
+| GET | `/api/v1/status` | API Bearer | Identity, boot ID, state, role, deploy commit |
+| GET | `/api/v1/about` | API Bearer | Attribution and licence |
+| GET | `/api/v1/peers` | API Bearer | Discover reserved peers |
+| POST | `/api/v1/setup/claim` | API Bearer | Become coordinator; announce to peers |
+| POST | `/api/v1/reset` | API Bearer | Demo reset (`scope=demo` only) |
+| GET | `/api/v1/peer/hello` | peer Bearer | Peer identity exchange |
+| POST | `/api/v1/peer/claim` | peer Bearer | Accept coordinator claim → Waiting |
+| POST | `/api/v1/peer/heartbeat` | peer Bearer | Refresh Waiting lease |
+| POST | `/api/v1/peer/release` | peer Bearer | Session ended → Initial |
 
-Default listen: `0.0.0.0:8080`. Token: `/etc/cot-r/api.token`.
+Default listen: `0.0.0.0:8080`.
+
+Tokens: `/etc/cot-r/api.token` (operator), `/etc/cot-r/peer.token` (shared cluster).
+
+Details: [peers.md](peers.md).
 
 ## Reset scopes
 

@@ -9,7 +9,7 @@
 | Command | Mutates system? | Purpose |
 |---|---|---|
 | `status` | No | Inspect compatibility, network, I²C, services, tracked state |
-| `prepare` | Yes (needs root) | Idempotent baseline preparation |
+| `prepare` | Yes (needs root) | Idempotent baseline preparation; optional `--reserved-ipv4` / `--device-id` |
 | `reset-project` | Yes (needs root) | Remove project-owned install, restore tracked changes, re-prepare |
 | `oled-test` | Mild | Probe bus and optionally draw a test pattern (needs prepared OLED) |
 | `deploy-status` | No | Show deploy clone and recorded commit |
@@ -30,9 +30,20 @@ reboot, the script **reports** it and exits successfully after staging the chang
 2. Record initial snapshot under the project state directory.
 3. Refresh apt metadata and install a small baseline tool set (plus OLED deps when enabling display).
 4. Create project-owned users, directories, and permissions.
-5. Enable I²C7 overlay for the OLED header if needed (backup `armbianEnv.txt` first).
-6. Install udev rules, display unit, and config templates.
-7. Validate what can be validated without reboot; report remaining steps.
+5. Resolve **this board's** reserved management IP (CLI, MAC map, confirm, or prompt). Never seed `.196` from a shared example.
+6. Enable I²C7 overlay for the OLED header if needed (backup `armbianEnv.txt` first).
+7. Install udev rules, display unit, and config templates.
+8. Validate what can be validated without reboot; report remaining steps.
+
+First board prepare examples:
+
+```bash
+# RockPi 1 (explicit; safest when recovering from a wrong static IP)
+sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1
+
+# Or add end0 MAC to /etc/cot-r/device-macs.map, then:
+sudo ./scripts/cot-r prepare
+```
 
 ### Baseline packages
 

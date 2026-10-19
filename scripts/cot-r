@@ -45,6 +45,7 @@ Usage: cot-r <command> [args]
 Commands:
   status          Inspect platform, network, I2C, and project state (no changes)
   prepare         Idempotent baseline preparation (requires root)
+                  Options: --reserved-ipv4 <ip> [--device-id <name>]
   reset-project   Stop project services, remove project-owned install, re-prepare (root)
   oled-test       Discover SSD1306 and render a short test pattern
   deploy-status   Show deployment clone and recorded commit
@@ -68,6 +69,8 @@ Licence: AGPL-3.0-only
 
 Notes:
   - Baseline prepare never enables the AP or rewrites netplan.
+  - prepare never guesses a board IP from a shared example; it uses MAC map,
+    --reserved-ipv4, existing device.env (with confirm), or an interactive prompt.
   - ap-enable preserves end0 MAC on br0 so mAP DHCP reservations stay valid.
   - Development clone and deploy clone (/opt/cot-r/src) are separate.
 EOF
@@ -81,10 +84,10 @@ main() {
       cot_r_cmd_status
       ;;
     prepare)
-      cot_r_cmd_prepare
+      cot_r_cmd_prepare "$@"
       ;;
     reset-project|reset_project)
-      cot_r_cmd_reset_project
+      cot_r_cmd_reset_project "$@"
       ;;
     oled-test|oled_test)
       cot_r_cmd_oled_test

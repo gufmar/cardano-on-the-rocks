@@ -20,8 +20,9 @@ Incremental build. Working on RockPi 2 today:
 - Deployment user + `/opt/cot-r/src` clone with update/rollback
 - Management API with identity, boot ID, status, and demo reset
 - Bridged AP tooling (`ap-prepare` / `ap-enable --confirm` / `ap-disable`)
+- Peer coordination (claim / lease / Waiting AP standby); see [docs/peers.md](docs/peers.md)
 
-Next: peer coordination, RouterOS uplink control, local setup UI, portal handoff.
+Next: RouterOS uplink control, local setup UI, portal handoff.
 
 Not yet implemented: association portal handoff, guest-portal flow, demo application.
 
@@ -44,7 +45,9 @@ On a RockPi with this repository cloned:
 
 ```bash
 ./scripts/cot-r status          # inspection only
-sudo ./scripts/cot-r prepare    # idempotent system preparation
+# Pick THIS board's reserved IP (do not reuse another RockPi's address):
+sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1
+# RockPi 2: ...196 rockpi-2 | RockPi 3: ...194 rockpi-3
 ./scripts/cot-r status          # verify
 ```
 
@@ -104,10 +107,13 @@ broken Layer-2 path; use console/physical access in those cases.
 ## Stable addresses
 
 Each RockPi uses a fixed management IPv4 from `/etc/cot-r/device.env`
-(`COT_R_RESERVED_IPV4`: `.195` / `.196` / `.194`). See [docs/addressing.md](docs/addressing.md).
+(`.195` / `.196` / `.194`). Assign per board via prepare flags, MAC map, or
+prompt. Never seed another board's IP from a shared example. See
+[docs/addressing.md](docs/addressing.md).
 
 ```bash
 ./scripts/cot-r net-status
+sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.196 --device-id rockpi-2
 sudo ./scripts/cot-r net-set-address 172.27.213.196 rockpi-2
 ```
 

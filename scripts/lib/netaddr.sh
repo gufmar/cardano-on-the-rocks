@@ -9,6 +9,8 @@ COT_R_GATEWAY_DEFAULT="172.27.213.1"
 COT_R_DNS_DEFAULT="172.27.213.1"
 COT_R_PREFIX_DEFAULT="24"
 COT_R_NETWORKD_END0_STATIC="${COT_R_NETWORKD_DIR:-/etc/systemd/network}/00-cot-r-end0-static.network"
+COT_R_DEVICE_MACS_MAP="${COT_R_DEVICE_MACS_MAP:-${COT_R_ETC_DIR}/device-macs.map}"
+COT_R_KNOWN_RESERVED_IPV4S=(172.27.213.194 172.27.213.195 172.27.213.196)
 
 cot_r_load_device_net() {
   COT_R_RESERVED_IPV4="${COT_R_RESERVED_IPV4:-}"
@@ -28,6 +30,62 @@ cot_r_load_device_net() {
   COT_R_PREFIX="${COT_R_PREFIX:-$COT_R_PREFIX_DEFAULT}"
 }
 
+cot_r_normalize_mac() {
+  local mac="${1:-}"
+  mac="$(printf '%s' "$mac" | tr 'A-F' 'a-f' | tr -d '[:space:]')"
+  printf '%s\n' "$mac"
+}
+
+cot_r_end0_mac() {
+  local mac=""
+  if [[ -r /sys/class/net/end0/address ]]; then
+    mac="$(cot_r_normalize_mac "$(cat /sys/class/net/end0/address)")"
+  fi
+  [[ -n "$mac" ]] || return 1
+  printf '%s\n' "$mac"
+}
+
+cot_r_is_known_reserved_ipv4() {
+  local ip="$1" x
+  for x in "${COT_R_KNOWN_RESERVED_IPV4S[@]}"; do
+    [[ "$ip" == "$x" ]] && return 0
+  done
+  return 1
+}
+
+cot_r_default_device_id_for_ip() {
+  case "$1" in
+    172.27.213.195) printf 'rockpi-1\n' ;;
+    172.27.213.196) printf 'rockpi-2\n' ;;
+    172.27.213.194) printf 'rockpi-3\n' ;;
+    *) printf 'rockpi-unset\n' ;;
+  esac
+}
+
+cot_r_lookup_mac_map() {
+  # Prints: <ipv4> <device-id> when this end0 MAC is listed in the map.
+  local mac map="${COT_R_DEVICE_MACS_MAP}"
+  local line m ip id
+  mac="$(cot_r_end0_mac)" || return 1
+  [[ -f "$map" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="$(printf '%s' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [[ -n "$line" ]] || continue
+    # shellcheck disable=SC2086
+    set -- $line
+    m="$(cot_r_normalize_mac "${1:-}")"
+    ip="${2:-}"
+    id="${3:-}"
+    if [[ "$m" == "$mac" && -n "$ip" ]]; then
+      [[ -n "$id" ]] || id="$(cot_r_default_device_id_for_ip "$ip")"
+      printf '%s %s\n' "$ip" "$id"
+      return 0
+    fi
+  done <"$map"
+  return 1
+}
+
 cot_r_reserved_ipv4() {
   cot_r_load_device_net
   local ip="${COT_R_RESERVED_IPV4:-}"
@@ -35,6 +93,159 @@ cot_r_reserved_ipv4() {
     return 1
   fi
   printf '%s\n' "$ip"
+}
+
+cot_r_prompt_reserved_identity() {
+  # Interactive selection. Sets COT_R_RESOLVED_IPV4 / COT_R_RESOLVED_DEVICE_ID.
+  local mac choice ip id
+  mac="$(cot_r_end0_mac 2>/dev/null || echo unknown)"
+  echo >&2
+  cot_r_warn "No reserved management IP for this board yet."
+  echo "  end0 MAC: ${mac}" >&2
+  echo "  Choose the fixed address for THIS RockPi (do not reuse another board's IP):" >&2
+  echo "    1) 172.27.213.195  rockpi-1" >&2
+  echo "    2) 172.27.213.196  rockpi-2" >&2
+  echo "    3) 172.27.213.194  rockpi-3" >&2
+  echo "    s) skip static addressing for now" >&2
+  if [[ ! -t 0 ]]; then
+    cot_r_warn "stdin is not a TTY; cannot prompt. Pass --reserved-ipv4 or add this MAC to device-macs.map"
+    return 1
+  fi
+  while true; do
+    read -r -p "Select [1/2/3/s]: " choice || return 1
+    case "$choice" in
+      1) ip=172.27.213.195; id=rockpi-1; break ;;
+      2) ip=172.27.213.196; id=rockpi-2; break ;;
+      3) ip=172.27.213.194; id=rockpi-3; break ;;
+      s|S|skip) return 1 ;;
+      *) echo "Invalid choice" >&2 ;;
+    esac
+  done
+  COT_R_RESOLVED_IPV4="$ip"
+  COT_R_RESOLVED_DEVICE_ID="$id"
+  return 0
+}
+
+cot_r_parse_prepare_identity_args() {
+  # Consumes prepare CLI flags into COT_R_CLI_RESERVED_IPV4 / COT_R_CLI_DEVICE_ID.
+  COT_R_CLI_RESERVED_IPV4="${COT_R_CLI_RESERVED_IPV4:-}"
+  COT_R_CLI_DEVICE_ID="${COT_R_CLI_DEVICE_ID:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --reserved-ipv4|--ip)
+        COT_R_CLI_RESERVED_IPV4="${2:-}"
+        [[ -n "${COT_R_CLI_RESERVED_IPV4}" ]] || die "$1 requires an IPv4 argument"
+        shift 2
+        ;;
+      --device-id)
+        COT_R_CLI_DEVICE_ID="${2:-}"
+        [[ -n "${COT_R_CLI_DEVICE_ID}" ]] || die "--device-id requires a value"
+        shift 2
+        ;;
+      --help|-h)
+        cat <<'EOF'
+prepare identity options:
+  --reserved-ipv4 <ip>   Fixed management IPv4 (.194 / .195 / .196)
+  --ip <ip>              Alias for --reserved-ipv4
+  --device-id <name>     Logical name (rockpi-1 / rockpi-2 / rockpi-3)
+EOF
+        exit 0
+        ;;
+      *)
+        die "Unknown prepare option: $1 (try --reserved-ipv4 / --device-id)"
+        ;;
+    esac
+  done
+}
+
+cot_r_ensure_device_identity() {
+  # Resolve and persist this board's reserved IP before any static network write.
+  # Priority: CLI flags > MAC map > existing device.env > interactive prompt.
+  require_root
+  local mac map_line map_ip map_id existing_ip existing_id ip id
+  COT_R_RESOLVED_IPV4=""
+  COT_R_RESOLVED_DEVICE_ID=""
+
+  mac="$(cot_r_end0_mac 2>/dev/null || true)"
+  cot_r_info "end0 MAC: ${mac:-unknown}"
+
+  if [[ -n "${COT_R_CLI_RESERVED_IPV4:-}" ]]; then
+    ip="${COT_R_CLI_RESERVED_IPV4}"
+    id="${COT_R_CLI_DEVICE_ID:-$(cot_r_default_device_id_for_ip "$ip")}"
+    cot_r_info "Identity from CLI: ${id} ${ip}"
+  elif map_line="$(cot_r_lookup_mac_map)"; then
+    map_ip="${map_line%% *}"
+    map_id="${map_line#* }"
+    ip="$map_ip"
+    id="$map_id"
+    cot_r_ok "Identity from MAC map: ${id} ${ip}"
+  else
+    cot_r_load_device_net
+    existing_ip="${COT_R_RESERVED_IPV4:-}"
+    existing_id="${COT_R_DEVICE_ID:-}"
+    if [[ -n "$existing_ip" ]] && cot_r_is_known_reserved_ipv4 "$existing_ip"; then
+      ip="$existing_ip"
+      id="${existing_id:-$(cot_r_default_device_id_for_ip "$ip")}"
+      if [[ -n "$mac" ]]; then
+        cot_r_warn "MAC ${mac} is not in ${COT_R_DEVICE_MACS_MAP}"
+      fi
+      # Confirm on TTY: a previous bug seeded every board with rockpi-2 /.196.
+      if [[ -t 0 ]]; then
+        echo >&2
+        echo "  Current device.env: ${id} @ ${ip}" >&2
+        echo "  Keep it? [Y]es / [n]o (re-select) / [1]=.195 rockpi-1 / [2]=.196 rockpi-2 / [3]=.194 rockpi-3" >&2
+        local keep=""
+        read -r -p "Choice [Y/n/1/2/3]: " keep || keep=Y
+        case "$keep" in
+          ""|Y|y|yes|YES) cot_r_info "Keeping existing identity: ${id} ${ip}" ;;
+          1) ip=172.27.213.195; id=rockpi-1 ;;
+          2) ip=172.27.213.196; id=rockpi-2 ;;
+          3) ip=172.27.213.194; id=rockpi-3 ;;
+          n|N|no|NO)
+            if cot_r_prompt_reserved_identity; then
+              ip="${COT_R_RESOLVED_IPV4}"
+              id="${COT_R_RESOLVED_DEVICE_ID}"
+            else
+              return 1
+            fi
+            ;;
+          *) cot_r_warn "Unrecognized choice; keeping ${id} ${ip}" ;;
+        esac
+      else
+        cot_r_info "Identity from existing device.env: ${id} ${ip}"
+      fi
+    elif cot_r_prompt_reserved_identity; then
+      ip="${COT_R_RESOLVED_IPV4}"
+      id="${COT_R_RESOLVED_DEVICE_ID}"
+      cot_r_ok "Identity from prompt: ${id} ${ip}"
+    else
+      cot_r_warn "No reserved IP selected; skipping static management addressing"
+      cot_r_warn "Fix later: sudo ./scripts/cot-r prepare --reserved-ipv4 172.27.213.195 --device-id rockpi-1"
+      cot_r_warn "Or: add end0 MAC to ${COT_R_DEVICE_MACS_MAP} then re-run prepare"
+      return 1
+    fi
+  fi
+
+  if ! cot_r_is_known_reserved_ipv4 "$ip"; then
+    cot_r_warn "Address ${ip} is outside documented RockPi reservations (.194/.195/.196)"
+  fi
+
+  # If MAC map disagrees with CLI/env, MAC map already won above unless CLI set.
+  # When CLI set, still warn on map conflict.
+  if [[ -n "${COT_R_CLI_RESERVED_IPV4:-}" ]] && map_line="$(cot_r_lookup_mac_map)"; then
+    map_ip="${map_line%% *}"
+    if [[ "$map_ip" != "$ip" ]]; then
+      cot_r_warn "CLI IP ${ip} differs from MAC map ${map_ip} for ${mac}; using CLI as requested"
+    fi
+  fi
+
+  cot_r_write_device_env_address "$ip" "$id"
+  # Suggest persisting MAC map entry for next reinstall.
+  if [[ -n "$mac" ]] && ! cot_r_lookup_mac_map >/dev/null 2>&1; then
+    cot_r_warn "Consider adding to ${COT_R_DEVICE_MACS_MAP}:"
+    echo "  ${mac} ${ip} ${id}" >&2
+  fi
+  return 0
 }
 
 cot_r_mgmt_ipv4_for_ssid() {

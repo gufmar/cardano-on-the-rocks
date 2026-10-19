@@ -55,13 +55,14 @@ cot_r_fix_etc_permissions() {
   chown "root:${COT_R_DEPLOY_USER}" "${COT_R_ETC_DIR}"
   chmod 0750 "${COT_R_ETC_DIR}"
   local f
-  for f in device.env mgmt.env display.env device.id api.token \
-           device.env.example mgmt.env.example display.env.example; do
+  for f in device.env mgmt.env display.env device.id api.token peer.token \
+           device-macs.map \
+           device.env.example mgmt.env.example display.env.example device-macs.map.example; do
     if [[ -e "${COT_R_ETC_DIR}/${f}" ]]; then
       chown "root:${COT_R_DEPLOY_USER}" "${COT_R_ETC_DIR}/${f}"
       case "$f" in
         *.example) chmod 0644 "${COT_R_ETC_DIR}/${f}" ;;
-        api.token|device.id|device.env|mgmt.env|display.env) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
+        api.token|peer.token|device.id|device.env|mgmt.env|display.env|device-macs.map) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
         *) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
       esac
     fi
@@ -72,18 +73,20 @@ cot_r_fix_etc_permissions() {
 cot_r_install_config_templates() {
   mkdir -p "${COT_R_ETC_DIR}"
   local f
-  for f in device.env.example display.env.example mgmt.env.example ap.env.example; do
+  for f in device.env.example display.env.example mgmt.env.example ap.env.example \
+           device-macs.map.example; do
     if [[ -f "${COT_R_CONFIG_TEMPLATES}/${f}" ]]; then
       install -m 0644 -o root -g "${COT_R_DEPLOY_USER}" \
         "${COT_R_CONFIG_TEMPLATES}/${f}" "${COT_R_ETC_DIR}/${f}"
       cot_r_manifest_add_file "${COT_R_ETC_DIR}/${f}" "config-template"
     fi
   done
-  # Seed device.env from example if missing (no secrets).
-  if [[ ! -f "${COT_R_ETC_DIR}/device.env" && -f "${COT_R_ETC_DIR}/device.env.example" ]]; then
+  # Seed MAC map (safe shared file). Never auto-seed device.env with a board IP:
+  # that previously assigned RockPi 2's .196 to every fresh prepare.
+  if [[ ! -f "${COT_R_ETC_DIR}/device-macs.map" && -f "${COT_R_ETC_DIR}/device-macs.map.example" ]]; then
     install -m 0640 -o root -g "${COT_R_DEPLOY_USER}" \
-      "${COT_R_ETC_DIR}/device.env.example" "${COT_R_ETC_DIR}/device.env"
-    cot_r_manifest_add_file "${COT_R_ETC_DIR}/device.env" "config"
+      "${COT_R_ETC_DIR}/device-macs.map.example" "${COT_R_ETC_DIR}/device-macs.map"
+    cot_r_manifest_add_file "${COT_R_ETC_DIR}/device-macs.map" "config"
   fi
   if [[ ! -f "${COT_R_ETC_DIR}/mgmt.env" && -f "${COT_R_ETC_DIR}/mgmt.env.example" ]]; then
     install -m 0640 -o root -g "${COT_R_DEPLOY_USER}" \
@@ -111,6 +114,57 @@ PY
     chown "root:root" "${COT_R_API_TOKEN_FILE}"
   chmod 0640 "${COT_R_API_TOKEN_FILE}"
   cot_r_manifest_add_file "${COT_R_API_TOKEN_FILE}" "secret"
+}
+
+cot_r_ensure_peer_token() {
+  mkdir -p "${COT_R_ETC_DIR}"
+  if [[ -s "${COT_R_PEER_TOKEN_FILE}" ]]; then
+    cot_r_info "Peer token already present"
+  else
+    python3 - "${COT_R_PEER_TOKEN_FILE}" <<'PY'
+import secrets, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+path.write_text(secrets.token_urlsafe(32) + "\n", encoding="utf-8")
+path.chmod(0o640)
+PY
+    cot_r_ok "Created ${COT_R_PEER_TOKEN_FILE}"
+    cot_r_warn "Copy this peer.token to every RockPi so cluster peer auth matches"
+  fi
+  chown "root:${COT_R_DEPLOY_USER}" "${COT_R_PEER_TOKEN_FILE}" 2>/dev/null || \
+    chown "root:root" "${COT_R_PEER_TOKEN_FILE}"
+  chmod 0640 "${COT_R_PEER_TOKEN_FILE}"
+  cot_r_manifest_add_file "${COT_R_PEER_TOKEN_FILE}" "secret"
+}
+
+cot_r_install_mgmt_sudoers() {
+  local src dest
+  src="${COT_R_SUDOERS_SRC}"
+  dest="${COT_R_SUDOERS_DEST}"
+  [[ -f "$src" ]] || die "Missing sudoers template: ${src}"
+  # visudo -c requires the file to be in place; write temp then validate.
+  local tmp
+  tmp="$(mktemp)"
+  # Strip comments that confuse some visudo builds? Keep as-is; install then check.
+  install -m 0440 "$src" "$tmp"
+  if command -v visudo >/dev/null 2>&1; then
+    if ! visudo -cf "$tmp" >/dev/null 2>&1; then
+      rm -f "$tmp"
+      die "Invalid sudoers content in ${src}"
+    fi
+  fi
+  if [[ -f "$dest" ]] && cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    cot_r_info "sudoers already up to date: ${dest}"
+  else
+    if [[ -f "$dest" ]]; then
+      backup_file "$dest" >/dev/null
+    fi
+    install -m 0440 "$tmp" "$dest"
+    rm -f "$tmp"
+    cot_r_ok "Installed ${dest}"
+  fi
+  cot_r_manifest_add_file "$dest" "sudoers"
 }
 
 cot_r_ensure_device_id_file() {

@@ -50,3 +50,19 @@ def show_text(lines: List[str], *, priority: int = 80, ttl_ms: int = 8000) -> No
 
 def show_reset_notice() -> None:
     show_text(["Demo reset", "Initial state", "setup ready."], priority=80, ttl_ms=10000)
+
+
+def show_waiting(*, coordinator_label: Optional[str] = None) -> None:
+    """Persistent waiting screen for peers that acknowledged a coordinator."""
+    line2 = (coordinator_label or "coordinator")[:18]
+    send(
+        {
+            "cmd": "text",
+            "priority": 60,
+            "ttl_ms": 20000,
+            "payload": {
+                "lines": ["Waiting for setup", line2, "..."],
+                "align": "left",
+            },
+        }
+    )

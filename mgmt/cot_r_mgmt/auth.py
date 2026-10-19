@@ -11,6 +11,7 @@ from typing import Optional
 
 ETC_DIR = Path(os.environ.get("COT_R_ETC_DIR", "/etc/cot-r"))
 TOKEN_FILE = Path(os.environ.get("COT_R_API_TOKEN_FILE", str(ETC_DIR / "api.token")))
+PEER_TOKEN_FILE = Path(os.environ.get("COT_R_PEER_TOKEN_FILE", str(ETC_DIR / "peer.token")))
 
 
 def ensure_token(path: Path = TOKEN_FILE) -> str:
@@ -34,6 +35,15 @@ def load_token(path: Path = TOKEN_FILE) -> Optional[str]:
     except OSError:
         return None
     return token or None
+
+
+def ensure_peer_token(path: Path = PEER_TOKEN_FILE) -> str:
+    """Create shared peer-trust token if missing. Copy the same value to all boards."""
+    return ensure_token(path)
+
+
+def load_peer_token(path: Path = PEER_TOKEN_FILE) -> Optional[str]:
+    return load_token(path)
 
 
 def extract_bearer(authorization: Optional[str]) -> Optional[str]:
