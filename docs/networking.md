@@ -10,7 +10,7 @@ Verified on the live device during initial scaffolding:
 | Architecture | `aarch64` / `arm64` |
 | OS | Armbian_community 26.11.0-trunk.95 (Debian 13 trixie) |
 | Kernel | `6.18.56-current-rockchip64` |
-| Ethernet | `end0` → `172.27.213.196/24` (matches RockPi 2 reservation) |
+| Ethernet / bridge | Prefer static `COT_R_RESERVED_IPV4` on `end0` or `br0` (see addressing.md) |
 | Default route | via `172.27.213.1` |
 | Wi-Fi | `wlan0` present (`brcmfmac` / BCM4329-compatible SDIO), currently DOWN |
 | Network stack | `systemd-networkd` active; Netplan file `10-dhcp-all-interfaces.yaml` |

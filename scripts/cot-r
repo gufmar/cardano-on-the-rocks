@@ -29,6 +29,8 @@ source "${COT_R_LIB_DIR}/oled_hw.sh"
 source "${COT_R_LIB_DIR}/services.sh"
 # shellcheck source=lib/deploy.sh
 source "${COT_R_LIB_DIR}/deploy.sh"
+# shellcheck source=lib/netaddr.sh
+source "${COT_R_LIB_DIR}/netaddr.sh"
 # shellcheck source=lib/ap.sh
 source "${COT_R_LIB_DIR}/ap.sh"
 # shellcheck source=lib/prepare.sh
@@ -52,7 +54,9 @@ Commands:
   ap-show-psk     Print AP SSID, PSK, and ASCII Wi-Fi QR (root; --no-qr for text only)
   ap-prepare      Install hostapd/iw, generate SSID/PSK/configs (root; no bridge yet)
   ap-enable       Apply bridged AP (requires --confirm; may briefly blip SSH)
-  ap-disable      Remove bridge AP and restore Ethernet DHCP (requires --confirm)
+  ap-disable      Remove bridge AP and restore Ethernet static address (requires --confirm)
+  net-status      Show reserved vs live management IPv4
+  net-set-address Set COT_R_RESERVED_IPV4 and apply static addressing (root)
   version         Print tool version
   help            Show this help
 
@@ -108,6 +112,12 @@ main() {
       ;;
     ap-disable|ap_disable)
       cot_r_cmd_ap_disable "$@"
+      ;;
+    net-status|net_status)
+      cot_r_cmd_net_status
+      ;;
+    net-set-address|net_set_address)
+      cot_r_cmd_net_set_address "$@"
       ;;
     version|--version|-V)
       echo "cot-r $(cot_r_version)"

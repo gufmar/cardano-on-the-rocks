@@ -29,9 +29,25 @@ Do **not** silently switch to a routed/NATed AP design.
    ├── end0   (Ethernet to mAP LAN; no DHCP client on end0 itself)
    └── wlan0  (AP mode; hostapd adds this to br0)
 
-  Management IPv4 on br0 via DHCP from 172.27.213.1
-  No DHCP server on the RockPi.
+  Management IPv4 is **static** on br0 from COT_R_RESERVED_IPV4 (not DHCP).
+  Phones still get DHCP from the mAP through the bridge.
+  See [addressing.md](addressing.md).
 ```
+
+### Important Armbian detail
+
+Armbian’s catch-all Netplan unit (`10-netplan-all-eth-interfaces.network`) matches
+`end0` before a later `10-netplan-end0.network` bridge-slave fragment. That left
+`wlan0` on `br0` while `end0` kept its own DHCP address outside the bridge, so
+phones associated (WPA OK) but never received a lease from the mAP.
+
+`ap-enable` therefore installs early systemd-networkd units:
+
+- `/etc/systemd/network/00-cot-r-br0.netdev`
+- `/etc/systemd/network/00-cot-r-br0.network`
+- `/etc/systemd/network/00-cot-r-end0.network`
+
+Verify after enable: `end0` and `wlan0` both show `master br0`, and IPv4 is on `br0`.
 
 ## Commands (explicit; not part of baseline `prepare`)
 
@@ -71,7 +87,7 @@ Expect a short SSH blip during `netplan apply`. Stay on Ethernet.
 | `/etc/cot-r/ap.env` | Non-secret AP settings |
 | `/etc/cot-r/ap.psk` | WPA2 passphrase (secret) |
 | `/etc/cot-r/hostapd.conf` | Generated hostapd config |
-| `/etc/netplan/60-cot-r-bridge.yaml` | Bridge fragment (only while enabled) |
+| `/etc/systemd/network/00-cot-r-*.{netdev,network}` | Bridge + end0 slave (while enabled) |
 | `/etc/systemd/system/cot-r-hostapd.service` | Project hostapd unit |
 | `/var/lib/cot-r/ap-enabled` | Enable marker |
 

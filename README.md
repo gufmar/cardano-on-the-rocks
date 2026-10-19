@@ -101,6 +101,16 @@ If software fails but the OS and network remain:
 There is no remote recovery after a failed OS, power loss with corrupt storage, or a
 broken Layer-2 path; use console/physical access in those cases.
 
+## Stable addresses
+
+Each RockPi uses a fixed management IPv4 from `/etc/cot-r/device.env`
+(`COT_R_RESERVED_IPV4`: `.195` / `.196` / `.194`). See [docs/addressing.md](docs/addressing.md).
+
+```bash
+./scripts/cot-r net-status
+sudo ./scripts/cot-r net-set-address 172.27.213.196 rockpi-2
+```
+
 ## Bridged AP (explicit; after prepare)
 
 ```bash
@@ -134,7 +144,8 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/oled.md](docs/oled.md) | I²C7, display service, QR limits |
 | [docs/provisioning.md](docs/provisioning.md) | Prepare / reset behaviour |
 | [docs/deployment.md](docs/deployment.md) | Deploy user, update, rollback |
-| [docs/ap-bridging.md](docs/ap-bridging.md) | Planned bridged AP design |
+| [docs/ap-bridging.md](docs/ap-bridging.md) | Bridged AP design |
+| [docs/addressing.md](docs/addressing.md) | Fixed RockPi management IPs |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 

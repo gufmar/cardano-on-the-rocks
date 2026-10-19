@@ -31,6 +31,14 @@ cot_r_cmd_prepare() {
   cot_r_ensure_device_id_file
   cot_r_ensure_api_token
   cot_r_fix_etc_permissions
+  # If a concrete reserved address is configured and AP is off, prefer static end0.
+  if [[ ! -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
+    if cot_r_reserved_ipv4 >/dev/null 2>&1; then
+      cot_r_write_end0_static_networkd
+      networkctl reload 2>/dev/null || true
+      networkctl reconfigure end0 2>/dev/null || true
+    fi
+  fi
 
   # 4) I2C7 overlay (no reboot performed)
   reboot_line="$(cot_r_ensure_i2c7_overlay | tee /dev/stderr | grep '^reboot_needed=' | tail -n1 || true)"
@@ -105,16 +113,20 @@ cot_r_cmd_reset_project() {
 
   # If bridged AP was enabled, tear it down so baseline Ethernet DHCP returns.
   # Keep AP PSK / ap.env (durable credentials) by default.
-  if [[ -f "${COT_R_STATE_DIR}/ap-enabled" || -f /etc/netplan/60-cot-r-bridge.yaml ]]; then
+  if [[ -f "${COT_R_STATE_DIR}/ap-enabled" || -f /etc/systemd/network/00-cot-r-end0.network || -f /etc/netplan/60-cot-r-bridge.yaml ]]; then
     cot_r_info "AP was enabled; disabling bridge as part of project reset"
     systemctl stop "${COT_R_HOSTAPD_UNIT}" 2>/dev/null || true
     systemctl disable "${COT_R_HOSTAPD_UNIT}" 2>/dev/null || true
+    rm -f /etc/systemd/network/00-cot-r-end0.network \
+          /etc/systemd/network/00-cot-r-br0.network \
+          /etc/systemd/network/00-cot-r-br0.netdev
     if [[ -f /etc/netplan/60-cot-r-bridge.yaml ]]; then
       backup_file /etc/netplan/60-cot-r-bridge.yaml >/dev/null
       rm -f /etc/netplan/60-cot-r-bridge.yaml
-      netplan generate || true
-      netplan apply || cot_r_warn "netplan apply during reset had errors"
     fi
+    netplan generate || true
+    networkctl reload 2>/dev/null || systemctl try-reload-or-restart systemd-networkd || true
+    ip link delete br0 type bridge 2>/dev/null || true
     rm -f "${COT_R_STATE_DIR}/ap-enabled"
   fi
 
