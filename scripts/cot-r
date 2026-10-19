@@ -29,6 +29,8 @@ source "${COT_R_LIB_DIR}/oled_hw.sh"
 source "${COT_R_LIB_DIR}/services.sh"
 # shellcheck source=lib/deploy.sh
 source "${COT_R_LIB_DIR}/deploy.sh"
+# shellcheck source=lib/ap.sh
+source "${COT_R_LIB_DIR}/ap.sh"
 # shellcheck source=lib/prepare.sh
 source "${COT_R_LIB_DIR}/prepare.sh"
 
@@ -46,6 +48,11 @@ Commands:
   deploy-status   Show deployment clone and recorded commit
   update [ref]    Fetch/checkout deploy clone and install runtime (root)
   rollback        Reinstall previous recorded commit (root)
+  ap-status       Inspect Wi-Fi AP capability and bridge state (no changes)
+  ap-show-psk     Print AP SSID and PSK (requires root)
+  ap-prepare      Install hostapd/iw, generate SSID/PSK/configs (root; no bridge yet)
+  ap-enable       Apply bridged AP (requires --confirm; may briefly blip SSH)
+  ap-disable      Remove bridge AP and restore Ethernet DHCP (requires --confirm)
   version         Print tool version
   help            Show this help
 
@@ -56,8 +63,8 @@ Source: https://github.com/gufmar/cardano-on-the-rocks
 Licence: AGPL-3.0-only
 
 Notes:
-  - Never reboots or restarts networking by itself.
-  - If the I2C7 overlay is newly staged, reboot when convenient, then re-run prepare.
+  - Baseline prepare never enables the AP or rewrites netplan.
+  - ap-enable preserves end0 MAC on br0 so mAP DHCP reservations stay valid.
   - Development clone and deploy clone (/opt/cot-r/src) are separate.
 EOF
 }
@@ -86,6 +93,21 @@ main() {
       ;;
     rollback)
       cot_r_cmd_rollback
+      ;;
+    ap-status|ap_status)
+      cot_r_cmd_ap_status
+      ;;
+    ap-show-psk|ap_show_psk|ap-credentials)
+      cot_r_cmd_ap_show_psk
+      ;;
+    ap-prepare|ap_prepare)
+      cot_r_cmd_ap_prepare
+      ;;
+    ap-enable|ap_enable)
+      cot_r_cmd_ap_enable "$@"
+      ;;
+    ap-disable|ap_disable)
+      cot_r_cmd_ap_disable "$@"
       ;;
     version|--version|-V)
       echo "cot-r $(cot_r_version)"

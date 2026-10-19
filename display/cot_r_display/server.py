@@ -53,6 +53,36 @@ def _env_int(name: str, default: int) -> int:
     return int(raw, 0)
 
 
+def _lease_ipv4() -> str:
+    """Best-effort DHCP/management IPv4 for splash (prefer end0, then br0)."""
+    for ifname in ("end0", "br0"):
+        try:
+            with open(f"/sys/class/net/{ifname}/operstate", encoding="utf-8") as f:
+                state = f.read().strip()
+            if state not in ("up", "unknown"):
+                # still try addresses; operstate can lag
+                pass
+        except OSError:
+            continue
+        try:
+            import subprocess
+
+            out = subprocess.check_output(
+                ["ip", "-4", "-o", "addr", "show", "dev", ifname],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            parts = line.split()
+            # format: idx ifname inet ADDR/PREFIX ...
+            if len(parts) >= 4 and parts[2] == "inet":
+                return parts[3].split("/", 1)[0]
+    return "ip unavailable"
+
+
 @dataclass(order=True)
 class _Queued:
     # heapq is min-heap; negate priority so higher priority comes first
@@ -160,7 +190,7 @@ class DisplayServer:
         # Show boot splash (or null)
         self.enqueue(
             text_lines(
-                ["Cardano Rocks", "default setup ready."],
+                ["Cardano Rocks", "default setup ready.", _lease_ipv4()],
                 ttl_ms=8000,
             )
         )

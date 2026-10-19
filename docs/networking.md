@@ -43,18 +43,18 @@ Inspect before applying:
 
 Verify absence of legacy `192.168.88.1/24` management addressing.
 
-## Planned RockPi AP design (not yet implemented)
+## RockPi AP design (bridged)
 
-Prefer **bridging** the RockPi AP to Ethernet:
+Prefer **bridging** the RockPi AP to Ethernet (see [ap-bridging.md](ap-bridging.md)):
 
 1. Phone joins RockPi SSID.
 2. Client DHCP comes from the mAP.
 3. Gateway remains `172.27.213.1`.
-4. RockPi management address moves onto the Linux bridge while preserving MAC/DHCP identity.
+4. RockPi management address moves onto `br0` with the permanent `end0` MAC.
 5. No extra DHCP server on the bridge.
 6. mAP continues Internet NAT.
 
-Do not silently switch to a routed/NATed AP design.
+Enable only via `cot-r ap-enable --confirm` (not baseline prepare).
 
 Coordinator keeps its AP; peers disable theirs only after acknowledging a valid coordinator.
 

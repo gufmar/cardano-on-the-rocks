@@ -70,14 +70,24 @@ cot_r_cmd_status() {
   else
     cot_r_warn "wlan0 not present"
   fi
-  if command -v iw >/dev/null 2>&1; then
-    if iw phy 2>/dev/null | grep -q '\* AP$'; then
+  if command -v iw >/dev/null 2>&1 || [[ -x /usr/sbin/iw ]]; then
+    local iwbin
+    iwbin="$(command -v iw 2>/dev/null || echo /usr/sbin/iw)"
+    if "$iwbin" phy 2>/dev/null | grep -q '\* AP$'; then
       cot_r_ok "Wi-Fi PHY advertises AP mode (iw)"
     else
       cot_r_warn "Wi-Fi PHY AP mode not clearly advertised by iw (inspect before enabling AP)"
     fi
   else
-    echo "iw: not installed (optional; useful before AP stage)"
+    echo "iw: not installed (ap-prepare installs it)"
+  fi
+  if [[ -d /sys/class/net/br0 ]]; then
+    echo "br0: $(ip -br addr show br0 2>/dev/null || true)"
+  fi
+  if [[ -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
+    echo "AP flag: enabled ($(cat "${COT_R_STATE_DIR}/ap-enabled" 2>/dev/null || true))"
+  else
+    echo "AP flag: disabled (use ap-prepare / ap-enable --confirm)"
   fi
   if ss -tln 2>/dev/null | grep -qE ':22\s'; then
     cot_r_ok "SSH appears to be listening on :22"

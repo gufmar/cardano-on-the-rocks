@@ -15,6 +15,10 @@
 | `deploy-status` | No | Show deploy clone and recorded commit |
 | `update [ref]` | Yes (needs root) | Fetch/checkout deploy clone and install runtime |
 | `rollback` | Yes (needs root) | Reinstall previous recorded commit |
+| `ap-status` | No | Wi-Fi AP / bridge inspection |
+| `ap-prepare` | Yes (needs root) | Install hostapd/iw; generate SSID/PSK/configs |
+| `ap-enable --confirm` | Yes (needs root) | Apply bridged AP netplan + start hostapd |
+| `ap-disable --confirm` | Yes (needs root) | Remove AP bridge; restore Ethernet DHCP |
 | `version` | No | Print tool and repository version |
 
 Never unexpectedly restarts networking or reboots. If a boot overlay change needs a

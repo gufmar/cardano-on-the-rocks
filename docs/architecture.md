@@ -33,8 +33,9 @@ hints, not trust.
 | Display service | Sole owner of OLED hardware; local API | Done |
 | Management service | Identity, boot ID, state, demo reset API | Done (foundation) |
 | Deploy clone + update | `/opt/cot-r/src`, rollback via `deploy.json` | Done (foundation) |
-| Bridged AP + portal | Onboarding SSID and captive handoff | Next |
-| Peer coordination | Coordinator lease, heartbeats | Later |
+| Bridged AP (`ap-prepare` / `ap-enable`) | Bridge wlan0 to end0; mAP DHCP | Done (foundation) |
+| Peer coordination | Coordinator lease, heartbeats | Next |
+| Portal handoff + local UI | Association map + setup page | Later |
 | RouterOS client | Uplink scan/configure (backend only) | Later |
 | Local setup UI | Responsive offline page | Later |
 | Demo application | Cardano demo after foundations | Later |

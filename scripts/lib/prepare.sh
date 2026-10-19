@@ -103,10 +103,25 @@ cot_r_cmd_reset_project() {
 
   cot_r_stop_project_services
 
-  # Remove project-owned runtime payload
+  # If bridged AP was enabled, tear it down so baseline Ethernet DHCP returns.
+  # Keep AP PSK / ap.env (durable credentials) by default.
+  if [[ -f "${COT_R_STATE_DIR}/ap-enabled" || -f /etc/netplan/60-cot-r-bridge.yaml ]]; then
+    cot_r_info "AP was enabled; disabling bridge as part of project reset"
+    systemctl stop "${COT_R_HOSTAPD_UNIT}" 2>/dev/null || true
+    systemctl disable "${COT_R_HOSTAPD_UNIT}" 2>/dev/null || true
+    if [[ -f /etc/netplan/60-cot-r-bridge.yaml ]]; then
+      backup_file /etc/netplan/60-cot-r-bridge.yaml >/dev/null
+      rm -f /etc/netplan/60-cot-r-bridge.yaml
+      netplan generate || true
+      netplan apply || cot_r_warn "netplan apply during reset had errors"
+    fi
+    rm -f "${COT_R_STATE_DIR}/ap-enabled"
+  fi
+
+  # Remove project-owned runtime payload (preserve /opt/cot-r/src deploy clone)
   if [[ -d "${COT_R_OPT_DIR}" ]]; then
-    cot_r_info "Removing ${COT_R_OPT_DIR}"
-    rm -rf "${COT_R_OPT_DIR}"
+    cot_r_info "Removing runtime payloads under ${COT_R_OPT_DIR} (keeping src/ if present)"
+    find "${COT_R_OPT_DIR}" -mindepth 1 -maxdepth 1 ! -name src -exec rm -rf {} +
   fi
 
   # Remove generated display config (recreated by prepare); keep device.env secrets if any

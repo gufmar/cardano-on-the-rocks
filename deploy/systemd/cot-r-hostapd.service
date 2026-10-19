@@ -1,0 +1,22 @@
+[Unit]
+Description=Cardano on the Rocks Wi-Fi AP (hostapd)
+Documentation=https://github.com/gufmar/cardano-on-the-rocks
+After=network-online.target sys-subsystem-net-devices-wlan0.device
+Wants=network-online.target
+# Bridge br0 should exist before hostapd adds wlan0 to it.
+After=systemd-networkd-wait-online.service
+ConditionPathExists=/etc/cot-r/hostapd.conf
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd -P /run/cot-r/hostapd.pid /etc/cot-r/hostapd.conf
+ExecStartPre=/bin/mkdir -p /run/cot-r
+Restart=on-failure
+RestartSec=3
+Nice=5
+MemoryMax=32M
+# Do not take the machine down if radio fails
+SuccessExitStatus=0 1 255
+
+[Install]
+WantedBy=multi-user.target

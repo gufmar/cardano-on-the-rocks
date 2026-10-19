@@ -19,8 +19,9 @@ Incremental build. Working on RockPi 2 today:
 - OLED display service (Unix socket)
 - Deployment user + `/opt/cot-r/src` clone with update/rollback
 - Management API with identity, boot ID, status, and demo reset
+- Bridged AP tooling (`ap-prepare` / `ap-enable --confirm` / `ap-disable`)
 
-Next: bridged AP onboarding, peer coordination, RouterOS uplink control, local UI.
+Next: peer coordination, RouterOS uplink control, local setup UI, portal handoff.
 
 Not yet implemented: association portal handoff, guest-portal flow, demo application.
 
@@ -99,6 +100,17 @@ If software fails but the OS and network remain:
 
 There is no remote recovery after a failed OS, power loss with corrupt storage, or a
 broken Layer-2 path; use console/physical access in those cases.
+
+## Bridged AP (explicit; after prepare)
+
+```bash
+./scripts/cot-r ap-status
+sudo ./scripts/cot-r ap-prepare
+sudo ./scripts/cot-r ap-enable --confirm   # short network blip possible
+./scripts/cot-r ap-status
+```
+
+See [docs/ap-bridging.md](docs/ap-bridging.md). PSK stays in `/etc/cot-r/ap.psk`.
 
 ## Management API (after prepare)
 

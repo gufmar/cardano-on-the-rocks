@@ -72,7 +72,7 @@ cot_r_fix_etc_permissions() {
 cot_r_install_config_templates() {
   mkdir -p "${COT_R_ETC_DIR}"
   local f
-  for f in device.env.example display.env.example mgmt.env.example; do
+  for f in device.env.example display.env.example mgmt.env.example ap.env.example; do
     if [[ -f "${COT_R_CONFIG_TEMPLATES}/${f}" ]]; then
       install -m 0644 -o root -g "${COT_R_DEPLOY_USER}" \
         "${COT_R_CONFIG_TEMPLATES}/${f}" "${COT_R_ETC_DIR}/${f}"
@@ -187,7 +187,7 @@ cot_r_install_mgmt_unit() {
 
 cot_r_stop_project_services() {
   local unit
-  for unit in "${COT_R_MGMT_UNIT}" "${COT_R_DISPLAY_UNIT}"; do
+  for unit in "${COT_R_HOSTAPD_UNIT}" "${COT_R_MGMT_UNIT}" "${COT_R_DISPLAY_UNIT}"; do
     if systemctl list-unit-files "$unit" >/dev/null 2>&1; then
       systemctl stop "$unit" 2>/dev/null || true
       cot_r_info "Stopped ${unit}"

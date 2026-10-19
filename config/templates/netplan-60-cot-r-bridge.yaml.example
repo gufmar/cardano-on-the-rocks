@@ -1,0 +1,22 @@
+# Netplan fragment for bridged AP. Installed as /etc/netplan/60-cot-r-bridge.yaml
+# only by explicit `cot-r ap-enable --confirm`.
+# MAC is filled with the permanent end0 address so mAP DHCP reservations stay valid.
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    end0:
+      dhcp4: false
+      dhcp6: false
+      optional: true
+  bridges:
+    br0:
+      macaddress: "00:00:00:00:00:00"
+      interfaces:
+        - end0
+      dhcp4: true
+      dhcp6: false
+      parameters:
+        stp: false
+        forward-delay: 0

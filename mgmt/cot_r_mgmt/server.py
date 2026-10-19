@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -234,6 +235,25 @@ class Handler(BaseHTTPRequestHandler):
         _json_response(self, 404, {"ok": False, "error": "not found"})
 
 
+def _lease_ipv4() -> str:
+    """Best-effort management IPv4 for OLED splash (prefer end0, then br0)."""
+    for ifname in ("end0", "br0"):
+        try:
+            out = subprocess.check_output(
+                ["ip", "-4", "-o", "addr", "show", "dev", ifname],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=1.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[2] == "inet":
+                return parts[3].split("/", 1)[0]
+    return "ip unavailable"
+
+
 def main() -> int:
     global CTX
     bind = os.environ.get("COT_R_MGMT_BIND", "0.0.0.0")
@@ -244,7 +264,7 @@ def main() -> int:
         return 1
 
     display_client.show_text(
-        ["Cardano Rocks", "default setup ready."],
+        ["Cardano Rocks", "default setup ready.", _lease_ipv4()],
         priority=50,
         ttl_ms=8000,
     )

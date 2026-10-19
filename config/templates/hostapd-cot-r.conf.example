@@ -1,0 +1,24 @@
+# Example hostapd config for Cardano on the Rocks bridged AP.
+# Live file is generated at /etc/cot-r/hostapd.conf by cot-r ap-prepare/ap-enable.
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+
+interface=wlan0
+driver=nl80211
+bridge=br0
+
+ssid=Cardano-on-the-Rocks .196
+country_code=CH
+ieee80211d=1
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+
+auth_algs=1
+ignore_broadcast_ssid=0
+
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+# wpa_passphrase is injected at generate time from /etc/cot-r/ap.psk
+wpa_passphrase=REPLACE_ME
