@@ -1,0 +1,3 @@
+# Allow cot-r display group to access I2C device nodes used by the OLED.
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+KERNEL=="i2c-[0-9]*", GROUP="i2c", MODE="0660"
