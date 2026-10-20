@@ -2,10 +2,15 @@
 
 ## Goal
 
-Each unconfigured RockPi advertises its own SSID derived from its LAN lease:
+Each unconfigured RockPi advertises a short per-board SSID (OLED Wi-Fi QR sized):
 
-`Cardano-on-the-Rocks .<last-octet>`  
-Example: address `172.27.213.196` → SSID `Cardano-on-the-Rocks .196`
+| Board | Reserved IP | SSID |
+|---|---|---|
+| RockPi 1 | `.195` | `Cardano-Rocks 1` |
+| RockPi 2 | `.196` | `Cardano-Rocks 2` |
+| RockPi 3 | `.194` | `Cardano-Rocks 3` |
+
+PSK defaults to **10** unambiguous characters (easy to type; fits the QR).
 
 Prefer **bridging** the AP to Ethernet so phones get DHCP from the mAP
 (`172.27.213.1`) and the RockPi keeps its reserved management address on the bridge.
@@ -67,7 +72,8 @@ Expect a short SSH blip during `netplan apply`. Stay on Ethernet.
 
 | Setting | Default |
 |---|---|
-| SSID | `Cardano-on-the-Rocks .<last-octet>` (e.g. `Cardano-on-the-Rocks .196`) |
+| SSID | `Cardano-Rocks 1` / `2` / `3` |
+| PSK | 10 chars in `/etc/cot-r/ap.psk` (`ap-prepare --rotate-psk` to renew) |
 | Channel | `6` (2.4 GHz) |
 | Country | `CH` (override in `/etc/cot-r/ap.env`) |
 | PSK | `/etc/cot-r/ap.psk` (generated once; kept across demo resets) |
@@ -103,12 +109,13 @@ Preserve LAN bridge, reservations, NAT, upstream DHCP, and PoE settings.
 
 ## OLED / QR note
 
-The SSID is longer than a compact code name. Wi-Fi QR payloads on a 128×64 panel
-are tight; keep the PSK compact (as generated) and always offer a readable
-SSID/PSK/setup-URL fallback screen if the QR cannot encode reliably.
+Phone cameras only auto-join via standard `WIFI:` QR codes (not Data Matrix / Micro QR).
+With `Cardano-Rocks N` + a 10-char PSK the payload fits 128×64 at ≥2px modules.
+`ap-show-psk` still prints a terminal QR and can push the code to the OLED.
 
 ## Next after AP works
 
+- OLED onboarding (Wi‑Fi QR → setup URL after first STA) — see [onboarding-oled.md](onboarding-oled.md)
 - Peer coordination (peers hide QR / disable AP after coordinator ack) — see [peers.md](peers.md)
 - Association reporting for portal handoff
 - Local setup UI + Wi-Fi QR on OLED (with readable fallback)

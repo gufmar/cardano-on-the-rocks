@@ -56,11 +56,13 @@ sudo ./scripts/cot-r ap-show-psk            # SSID + PSK + ASCII Wi-Fi QR
 ./scripts/cot-r net-status
 ```
 
-Show credentials again anytime (root):
+Show credentials again anytime (root). Also pushes a Wi-Fi QR to the OLED when the
+display service is up (128×64 may fall back to text if the payload is too dense):
 
 ```bash
-sudo ./scripts/cot-r ap-show-psk          # with QR
-sudo ./scripts/cot-r ap-show-psk --no-qr  # text only
+sudo ./scripts/cot-r ap-show-psk              # terminal QR + OLED
+sudo ./scripts/cot-r ap-show-psk --no-qr      # text only (still tries OLED)
+sudo ./scripts/cot-r ap-show-psk --no-oled    # terminal only
 ```
 
 Details: [docs/provisioning.md](docs/provisioning.md), [docs/ap-bridging.md](docs/ap-bridging.md), [docs/oled.md](docs/oled.md).
@@ -157,6 +159,7 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/provisioning.md](docs/provisioning.md) | Prepare / reset behaviour |
 | [docs/deployment.md](docs/deployment.md) | Deploy user, update, rollback |
 | [docs/ap-bridging.md](docs/ap-bridging.md) | Bridged AP design |
+| [docs/onboarding-oled.md](docs/onboarding-oled.md) | OLED step 1 Wi‑Fi QR → step 2 setup URL |
 | [docs/addressing.md](docs/addressing.md) | Fixed RockPi management IPs |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

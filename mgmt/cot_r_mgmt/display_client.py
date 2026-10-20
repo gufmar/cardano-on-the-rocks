@@ -66,3 +66,30 @@ def show_waiting(*, coordinator_label: Optional[str] = None) -> None:
             },
         }
     )
+
+
+def show_onboarding(
+    *,
+    step: int,
+    digit: str,
+    lines: List[str],
+    qr_data: str,
+    qr_side: str = "right",
+    priority: int = 55,
+    ttl_ms: int = 15000,
+) -> None:
+    """Two-step join flow: Wi-Fi QR (1) then local setup URL QR (2)."""
+    send(
+        {
+            "cmd": "onboarding",
+            "priority": priority,
+            "ttl_ms": ttl_ms,
+            "payload": {
+                "step": step,
+                "digit": digit,
+                "lines": lines[:3],
+                "qr_data": qr_data,
+                "qr_side": qr_side,
+            },
+        }
+    )

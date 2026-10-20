@@ -66,11 +66,38 @@ cot_r_lease_ipv4() {
   printf '%s\n' "$ip"
 }
 
+cot_r_board_index() {
+  # Map reserved IP / device id -> 1|2|3 for short OLED-friendly SSIDs.
+  local ip last id=""
+  if [[ -f "${COT_R_ETC_DIR}/device.env" ]]; then
+    # shellcheck disable=SC1090
+    # shellcheck disable=SC1091
+    source "${COT_R_ETC_DIR}/device.env" 2>/dev/null || true
+    id="${COT_R_DEVICE_ID:-}"
+  fi
+  case "$id" in
+    rockpi-1|RockPi-1|1) printf '1\n'; return 0 ;;
+    rockpi-2|RockPi-2|2) printf '2\n'; return 0 ;;
+    rockpi-3|RockPi-3|3) printf '3\n'; return 0 ;;
+  esac
+  if declare -F cot_r_mgmt_ipv4_for_ssid >/dev/null 2>&1; then
+    ip="$(cot_r_mgmt_ipv4_for_ssid)"
+  else
+    ip="$(cot_r_lease_ipv4)"
+  fi
+  last="${ip##*.}"
+  case "$last" in
+    195) printf '1\n' ;;
+    196) printf '2\n' ;;
+    194) printf '3\n' ;;
+    *) printf '?\n' ;;
+  esac
+}
+
 cot_r_default_ssid() {
-  # Unique per device: "Cardano-on-the-Rocks .<last-octet>"
-  # Prefer reserved management IP so SSID stays stable across DHCP mishaps.
-  # Example: 172.27.213.196 -> "Cardano-on-the-Rocks .196"
-  local ip last override="${COT_R_AP_SSID_OVERRIDE:-}"
+  # Short SSID so WIFI: QR fits 128x64 at >=2px modules.
+  # Example: rockpi-2 / .196 -> "Cardano-Rocks 2"
+  local override="${COT_R_AP_SSID_OVERRIDE:-}" idx
   if [[ -z "$override" && -f "${COT_R_ETC_DIR}/device.env" ]]; then
     # shellcheck disable=SC1090
     # shellcheck disable=SC1091
@@ -81,16 +108,8 @@ cot_r_default_ssid() {
     printf '%s\n' "$override"
     return 0
   fi
-  if declare -F cot_r_mgmt_ipv4_for_ssid >/dev/null 2>&1; then
-    ip="$(cot_r_mgmt_ipv4_for_ssid)"
-  else
-    ip="$(cot_r_lease_ipv4)"
-  fi
-  last="${ip##*.}"
-  if [[ -z "$last" || "$last" == "$ip" ]]; then
-    last="xxx"
-  fi
-  printf 'Cardano-on-the-Rocks .%s\n' "$last"
+  idx="$(cot_r_board_index)"
+  printf 'Cardano-Rocks %s\n' "$idx"
 }
 
 cot_r_phy_supports_ap() {
@@ -128,6 +147,26 @@ cot_r_secret_file_status() {
   printf 'missing'
 }
 
+cot_r_wifi_qr_payload() {
+  local ssid="$1"
+  local psk="$2"
+  python3 - "$ssid" "$psk" <<'PY'
+import sys
+
+def wifi_escape(value: str) -> str:
+    out = []
+    for ch in value:
+        if ch in ("\\", ";", ",", '"', ":"):
+            out.append("\\" + ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+ssid, psk = sys.argv[1], sys.argv[2]
+print(f"WIFI:T:WPA;S:{wifi_escape(ssid)};P:{wifi_escape(psk)};H:false;;")
+PY
+}
+
 cot_r_print_wifi_qr_ascii() {
   local ssid="$1"
   local psk="$2"
@@ -140,7 +179,6 @@ import sys
 import qrcode
 
 def wifi_escape(value: str) -> str:
-    # WIFI: QR / MeCard specials
     out = []
     for ch in value:
         if ch in ("\\", ";", ",", '"', ":"):
@@ -160,19 +198,77 @@ qr.add_data(payload)
 qr.make(fit=True)
 print("WIFI_QR_PAYLOAD=" + payload)
 print("--- scan with phone camera / Wi-Fi QR reader ---")
-# invert=True tends to scan better on light terminal backgrounds
 qr.print_ascii(invert=True)
 print("--- end QR ---")
+PY
+}
+
+cot_r_display_wifi_qr() {
+  # Best-effort OLED QR via cot-r-display. Dense WIFI payloads may fall back to text.
+  local ssid="$1"
+  local psk="$2"
+  local sock="${COT_R_DISPLAY_SOCK:-/run/cot-r/display.sock}"
+  local payload
+  [[ -S "$sock" ]] || {
+    cot_r_warn "Display socket missing (${sock}); skip OLED QR"
+    return 0
+  }
+  payload="$(cot_r_wifi_qr_payload "$ssid" "$psk")" || return 0
+  python3 - "$sock" "$payload" "$ssid" <<'PY'
+import json, socket, sys
+sock_path, payload, ssid = sys.argv[1], sys.argv[2], sys.argv[3]
+msg = {
+    "cmd": "qr",
+    "priority": 70,
+    "ttl_ms": 120000,
+    "payload": {"data": payload},
+}
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(2.0)
+        s.connect(sock_path)
+        s.sendall((json.dumps(msg) + "\n").encode())
+        data = b""
+        while b"\n" not in data:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+    reply = json.loads(data.decode().split("\n", 1)[0]) if data else {}
+except OSError as e:
+    print(f"display unavailable: {e}", file=sys.stderr)
+    sys.exit(0)
+print(json.dumps(reply))
+if not reply.get("ok"):
+    # Fallback: short text if QR rejected as too dense
+    msg2 = {
+        "cmd": "text",
+        "priority": 70,
+        "ttl_ms": 60000,
+        "payload": {"lines": ["Join Wi-Fi", ssid[:21], "ap-show-psk"], "align": "left"},
+    }
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(2.0)
+            s.connect(sock_path)
+            s.sendall((json.dumps(msg2) + "\n").encode())
+    except OSError:
+        pass
 PY
 }
 
 cot_r_cmd_ap_show_psk() {
   require_root
   cot_r_ap_load_env
-  local ssid psk no_qr=0
-  if [[ "${1:-}" == "--no-qr" ]]; then
-    no_qr=1
-  fi
+  local ssid psk no_qr=0 no_oled=0
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --no-qr) no_qr=1 ;;
+      --no-oled) no_oled=1 ;;
+      *) die "Unknown option: ${arg} (use --no-qr / --no-oled)" ;;
+    esac
+  done
   ssid="$(cot_r_default_ssid)"
   [[ -s "${COT_R_AP_PSK_FILE}" ]] || die "Missing ${COT_R_AP_PSK_FILE}; run sudo ./scripts/cot-r ap-prepare"
   psk="$(tr -d '[:space:]' <"${COT_R_AP_PSK_FILE}")"
@@ -182,6 +278,11 @@ cot_r_cmd_ap_show_psk() {
   if [[ "$no_qr" -eq 0 ]]; then
     echo
     cot_r_print_wifi_qr_ascii "$ssid" "$psk"
+  fi
+  if [[ "$no_oled" -eq 0 ]]; then
+    echo
+    cot_r_info "Pushing Wi-Fi QR to OLED"
+    cot_r_display_wifi_qr "$ssid" "$psk" || true
   fi
 }
 
@@ -240,26 +341,30 @@ cot_r_cmd_ap_status() {
 }
 
 cot_r_generate_psk() {
+  # 10 unambiguous chars: short to type, and WIFI: QR fits OLED with Cardano-Rocks N.
   local dest="${1:-$COT_R_AP_PSK_FILE_DEFAULT}"
+  local force="${2:-}"
   mkdir -p "$(dirname "$dest")"
-  if [[ -s "$dest" ]]; then
+  if [[ -s "$dest" && "$force" != "--force" ]]; then
     cot_r_info "AP PSK already present at ${dest}"
     return 0
   fi
-  # 16 bytes -> ~22 char urlsafe; compact enough for OLED QR experiments.
+  if [[ -s "$dest" && "$force" == "--force" ]]; then
+    backup_file "$dest" >/dev/null 2>&1 || true
+  fi
   python3 - "$dest" <<'PY'
 import secrets, sys
 from pathlib import Path
 path = Path(sys.argv[1])
-# Avoid ambiguous punctuation that breaks shell/hostapd quoting.
+# No 0/O/1/l/I; no punctuation (shell/hostapd + easy to read aloud).
 alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-psk = "".join(secrets.choice(alphabet) for _ in range(16))
+psk = "".join(secrets.choice(alphabet) for _ in range(10))
 path.write_text(psk + "\n", encoding="utf-8")
 path.chmod(0o640)
 print(path)
 PY
   chown "root:${COT_R_DEPLOY_USER}" "$dest" 2>/dev/null || true
-  cot_r_ok "Generated AP PSK at ${dest}"
+  cot_r_ok "Generated AP PSK at ${dest} (10 chars)"
   cot_r_manifest_add_file "$dest" "secret"
 }
 
@@ -323,6 +428,10 @@ wmm_enabled=1
 
 auth_algs=1
 ignore_broadcast_ssid=0
+
+# Allow cot-r mgmt to list associated STAs (onboarding step 1→2).
+ctrl_interface=/run/hostapd
+ctrl_interface_group=${COT_R_DEPLOY_USER}
 
 wpa=2
 wpa_key_mgmt=WPA-PSK
@@ -487,6 +596,13 @@ cot_r_require_confirm() {
 
 cot_r_cmd_ap_prepare() {
   require_root
+  local rotate_psk=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --rotate-psk|--new-psk) rotate_psk=1 ;;
+      *) die "Unknown ap-prepare option: ${arg} (use --rotate-psk)" ;;
+    esac
+  done
   cot_r_init_logging
   cot_r_ensure_state_dirs
   cot_r_write_initial_manifest
@@ -506,10 +622,26 @@ cot_r_cmd_ap_prepare() {
       "${COT_R_CONFIG_TEMPLATES}/ap.env.example" "${COT_R_ETC_DIR}/ap.env.example"
   fi
   cot_r_write_ap_env
-  cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}"
+  if [[ "$rotate_psk" -eq 1 ]]; then
+    cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}" --force
+  else
+    cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}"
+    # Old 16-char PSKs make WIFI: QR too dense with any readable SSID; nudge rotate.
+    if [[ -s "${COT_R_AP_PSK_FILE_DEFAULT}" ]]; then
+      local plen
+      plen="$(tr -d '[:space:]' <"${COT_R_AP_PSK_FILE_DEFAULT}" | wc -c)"
+      if [[ "$plen" -gt 12 ]]; then
+        cot_r_warn "Existing PSK is ${plen} chars; OLED Wi-Fi QR needs <=12. Re-run: sudo ./scripts/cot-r ap-prepare --rotate-psk"
+      fi
+    fi
+  fi
   cot_r_write_hostapd_conf
   cot_r_install_hostapd_unit
   cot_r_fix_etc_permissions 2>/dev/null || true
+  if [[ -f "${COT_R_STATE_DIR}/ap-enabled" ]] && systemctl is-active --quiet "${COT_R_HOSTAPD_UNIT}"; then
+    cot_r_info "AP already enabled; restarting hostapd to apply new SSID/PSK"
+    systemctl restart "${COT_R_HOSTAPD_UNIT}" || cot_r_warn "hostapd restart failed"
+  fi
   cot_r_ok "AP prepare complete. Review SSID/PSK, then: sudo ./scripts/cot-r ap-enable --confirm"
   cot_r_warn "ap-enable briefly reconfigures networking (bridge). Stay on Ethernet SSH; expect a short blip."
   echo "SSID=$(cot_r_default_ssid)"

@@ -31,7 +31,7 @@ Identity is resolved at `prepare` time, in order:
 - **AP enabled:** static address on `br0` (MAC still = `end0` permanent MAC).
 - **AP disabled:** static address on `end0` via `00-cot-r-end0-static.network`.
 
-SSID suffix uses the **reserved** address, not whatever dynamic lease last appeared.
+SSID is `Cardano-Rocks 1|2|3` from board id / reserved IP (short enough for OLED Wi-Fi QR).
 
 ## Commands
 

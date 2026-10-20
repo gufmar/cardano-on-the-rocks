@@ -16,10 +16,10 @@
 | `update [ref]` | Yes (needs root) | Fetch/checkout deploy clone and install runtime |
 | `rollback` | Yes (needs root) | Reinstall previous recorded commit |
 | `ap-status` | No | Wi-Fi AP / bridge inspection |
-| `ap-prepare` | Yes (needs root) | Install hostapd/iw; generate SSID/PSK/configs |
+| `ap-prepare` | Yes (needs root) | Install hostapd/iw; SSID/PSK/configs (`--rotate-psk` renews password) |
 | `ap-enable --confirm` | Yes (needs root) | Apply bridged AP + start hostapd |
 | `ap-disable --confirm` | Yes (needs root) | Remove AP bridge; restore Ethernet static |
-| `ap-show-psk` | Mild (needs root) | Print SSID, PSK, and ASCII Wi-Fi QR (`--no-qr` for text) |
+| `ap-show-psk` | Mild (needs root) | Print SSID/PSK/ASCII QR; push Wi-Fi QR to OLED (`--no-qr` / `--no-oled`) |
 | `net-status` | No | Reserved vs live management IPv4 |
 | `net-set-address` | Yes (needs root) | Set reserved IP and apply static addressing |
 | `version` | No | Print tool and repository version |

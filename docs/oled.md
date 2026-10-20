@@ -70,7 +70,19 @@ Debian packages preferred on Armbian trixie: `python3-luma.oled`, `python3-luma.
 
 ## QR-code constraints
 
-A 128×64 panel severely limits scannable QR capacity. Compact SSIDs and compact strong
-passwords are required. Preserve quiet zones; avoid smoothing. Always provide alternate
-screens with readable connection details and the setup URL. If a payload cannot be
-rendered reliably, report the limitation and use the tested fallback.
+A 128×64 panel severely limits scannable QR capacity. Modules must use an **integer**
+pixel size; stretching to fill 64px would blur the code and usually hurts scanning.
+
+Phone cameras join Wi-Fi from **QR** (`WIFI:…`) only. Data Matrix / Micro QR / Aztec are
+not useful for one-tap join.
+
+Default credentials are sized for this panel: SSID `Cardano-Rocks 1|2|3` and a **10-char**
+PSK → about **31 modules** → **2px** on 64px height. Older long SSIDs (`Cardano-on-the-Rocks .195`)
+need ~35 modules and only fit at 1px (unreliable).
+
+Apply on existing boards:
+
+```bash
+sudo ./scripts/cot-r ap-prepare --rotate-psk
+sudo ./scripts/cot-r ap-show-psk
+```

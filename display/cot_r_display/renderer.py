@@ -103,6 +103,9 @@ class Renderer:
             data = str(msg.payload.get("data") or "")
             self.draw_qr(data)
             return
+        if cmd == "onboarding":
+            self.draw_onboarding(msg.payload)
+            return
         if cmd == "bitmap":
             # payload: width, height, rows as list of hex strings (1 bit/pixel MSB)
             self.draw_bitmap(msg.payload)
@@ -136,20 +139,16 @@ class Renderer:
                 fill="white" if fill else "black",
             )
 
-    def draw_qr(self, data: str) -> None:
-        """Render a compact QR. Reports limitation when payload is too dense."""
+    def _qr_matrix(self, data: str) -> Optional[List[List[bool]]]:
         if not data:
-            self.draw_text(["QR empty"], align="center")
-            return
+            return None
         try:
             import qrcode
         except ImportError:
-            self.draw_text(["qrcode pkg", "missing"], align="center")
-            return
-        # Keep modules large enough to scan: box_size computed for 128px with quiet zone.
+            return None
         qr = qrcode.QRCode(
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            border=2,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            border=1,
             box_size=1,
         )
         qr.add_data(data)
@@ -157,39 +156,118 @@ class Renderer:
             qr.make(fit=True)
         except Exception as e:  # noqa: BLE001
             log.warning("QR encode failed: %s", e)
-            self.draw_text(["QR too long", "use setup URL"], align="center")
-            return
-        matrix = qr.get_matrix()
+            return None
+        return qr.get_matrix()
+
+    def _blit_qr(
+        self,
+        draw: Any,
+        matrix: List[List[bool]],
+        *,
+        max_w: int,
+        max_h: int,
+        ox: int,
+        oy: int,
+    ) -> bool:
         modules = len(matrix)
-        # Leave a few pixels margin; 64 height is the hard limit on this panel.
-        max_side = min(self.width, self.height) - 4
-        scale = max_side // modules if modules else 0
-        if scale < 2:
-            # Unreliable on phones at 1px modules on 128x64.
-            log.warning(
-                "QR payload needs %s modules; scale=%s (unreliable). Fallback text.",
-                modules,
-                scale,
-            )
-            preview = data if len(data) <= 40 else data[:37] + "..."
-            self.draw_text(["QR too dense", preview[:21], "see setup URL"], align="left")
-            return
+        scale = min(max_w, max_h) // modules if modules else 0
+        if scale < 1:
+            return False
         size = modules * scale
-        ox = (self.width - size) // 2
-        oy = (self.height - size) // 2
+        x0 = ox + max(0, (max_w - size) // 2)
+        y0 = oy + max(0, (max_h - size) // 2)
+        for r, row in enumerate(matrix):
+            for c, cell in enumerate(row):
+                if not cell:
+                    continue
+                px = x0 + c * scale
+                py = y0 + r * scale
+                draw.rectangle(
+                    (px, py, px + scale - 1, py + scale - 1),
+                    outline="white",
+                    fill="white",
+                )
+        return True
+
+    def _big_font(self, size: int = 40):
+        try:
+            from PIL import ImageFont
+
+            path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            return ImageFont.truetype(path, size=size)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _small_font(self, size: int = 12):
+        try:
+            from PIL import ImageFont
+
+            path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+            return ImageFont.truetype(path, size=size)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def draw_qr(self, data: str) -> None:
+        """Full-panel QR (legacy / ap-show-psk)."""
+        matrix = self._qr_matrix(data)
+        if matrix is None:
+            self.draw_text(["QR empty" if not data else "QR fail"], align="center")
+            return
         with self._canvas() as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
-            for r, row in enumerate(matrix):
-                for c, cell in enumerate(row):
-                    if not cell:
-                        continue
-                    x0 = ox + c * scale
-                    y0 = oy + r * scale
-                    draw.rectangle(
-                        (x0, y0, x0 + scale - 1, y0 + scale - 1),
-                        outline="white",
-                        fill="white",
-                    )
+            if not self._blit_qr(
+                draw, matrix, max_w=self.width, max_h=self.height, ox=0, oy=0
+            ):
+                preview = data if len(data) <= 40 else data[:37] + "..."
+                draw.text((2, 2), "QR too dense", fill="white")
+                draw.text((2, 14), preview[:21], fill="white")
+
+    def draw_onboarding(self, payload: dict) -> None:
+        """Split layout: step digit + caption on one side, full-height QR on the other.
+
+        step 1: digit/text LEFT, Wi-Fi QR RIGHT
+        step 2: setup-URL QR LEFT, digit/text RIGHT
+        """
+        step = int(payload.get("step") or 1)
+        digit = str(payload.get("digit") or step)
+        lines = [str(x) for x in (payload.get("lines") or [])][:3]
+        qr_data = str(payload.get("qr_data") or "")
+        # Default sides match the product story.
+        qr_side = str(payload.get("qr_side") or ("right" if step == 1 else "left")).lower()
+        if qr_side not in ("left", "right"):
+            qr_side = "right"
+
+        text_w = 60
+        qr_w = self.width - text_w
+        if qr_side == "right":
+            text_ox, qr_ox = 0, text_w
+        else:
+            qr_ox, text_ox = 0, qr_w
+
+        matrix = self._qr_matrix(qr_data)
+        big = self._big_font(36)
+        small = self._small_font(11)
+
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            # Digit near top of text column
+            if big is not None:
+                draw.text((text_ox + 4, -2), digit[:2], font=big, fill="white")
+                ty = 34
+            else:
+                draw.text((text_ox + 4, 0), digit[:2], fill="white")
+                ty = 14
+            for line in lines:
+                if small is not None:
+                    draw.text((text_ox + 2, ty), line[:10], font=small, fill="white")
+                else:
+                    draw.text((text_ox + 2, ty), line[:10], fill="white")
+                ty += 12
+
+            if matrix is None or not self._blit_qr(
+                draw, matrix, max_w=qr_w, max_h=self.height, ox=qr_ox, oy=0
+            ):
+                draw.text((qr_ox + 2, 24), "QR n/a", fill="white")
 
     def draw_bitmap(self, payload: dict) -> None:
         w = int(payload.get("width") or 0)

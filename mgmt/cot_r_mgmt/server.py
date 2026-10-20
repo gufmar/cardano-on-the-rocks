@@ -46,6 +46,7 @@ from cot_r_mgmt import auth as authmod  # noqa: E402
 from cot_r_mgmt import display_client  # noqa: E402
 from cot_r_mgmt import identity  # noqa: E402
 from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
+from cot_r_mgmt.onboarding import OnboardingDisplay  # noqa: E402
 from cot_r_mgmt.state import StateStore  # noqa: E402
 
 logging.basicConfig(
@@ -83,6 +84,7 @@ class AppContext:
             boot_id=self.boot_id,
             peer_token=self.peer_token,
         )
+        self.onboarding = OnboardingDisplay(store=self.store)
         log.info(
             "boot device_id=%s label=%s boot_id=%s state=%s peer_token=%s",
             self.device_id,
@@ -104,6 +106,43 @@ def _json_response(handler: BaseHTTPRequestHandler, code: int, body: Dict[str, A
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(raw)
+
+
+def _html_response(handler: BaseHTTPRequestHandler, code: int, html: str) -> None:
+    raw = html.encode("utf-8")
+    handler.send_response(code)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(raw)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.end_headers()
+    handler.wfile.write(raw)
+
+
+def _setup_page_html(*, device_label: str, device_id: str) -> str:
+    # Minimal phone-friendly stub until the full local setup UI lands.
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Cardano on the Rocks – setup</title>
+<style>
+body{{font-family:system-ui,sans-serif;margin:1.5rem;line-height:1.4;background:#0b1220;color:#e8eefc}}
+h1{{font-size:1.4rem;margin:0 0 .5rem}}
+p{{margin:.4rem 0;color:#b7c3de}}
+code{{background:#1a2438;padding:.1rem .35rem;border-radius:4px}}
+</style>
+</head>
+<body>
+<h1>Setup this node</h1>
+<p>You are on <strong>{device_label}</strong>.</p>
+<p>Device id: <code>{device_id}</code></p>
+<p>Full local setup UI comes next. For now use the management API on
+<code>/api/v1/</code> (Bearer token in <code>/etc/cot-r/api.token</code> on the board).</p>
+<p>Source: <a href="{SOURCE_URL}" style="color:#8eb6ff">{SOURCE_URL}</a></p>
+</body>
+</html>
+"""
 
 
 def _read_json(handler: BaseHTTPRequestHandler, limit: int = 64 * 1024) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -152,6 +191,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         assert CTX is not None
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path in ("/setup", "/"):
+            # Unauthenticated onboarding landing (phone just joined this AP).
+            _html_response(
+                self,
+                200,
+                _setup_page_html(device_label=CTX.device_label, device_id=CTX.device_id),
+            )
+            return
         if path == "/api/v1/health":
             st = CTX.store.snapshot()
             _json_response(
@@ -358,6 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                     "peer_releases": peer_results,
                 },
             )
+            CTX.onboarding.reset_latch()
             threading.Thread(target=display_client.show_reset_notice, daemon=True).start()
             return
         _json_response(self, 404, {"ok": False, "error": "not found"})
@@ -402,12 +450,14 @@ def main() -> int:
         ttl_ms=8000,
     )
     CTX.coord.start()
+    CTX.onboarding.start()
 
     httpd = ThreadingHTTPServer((bind, port), Handler)
     httpd.daemon_threads = True
 
     def _stop(*_a):
         log.info("shutdown requested")
+        CTX.onboarding.stop()
         CTX.coord.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
@@ -417,6 +467,7 @@ def main() -> int:
     try:
         httpd.serve_forever(poll_interval=0.5)
     finally:
+        CTX.onboarding.stop()
         CTX.coord.stop()
         httpd.server_close()
     return 0

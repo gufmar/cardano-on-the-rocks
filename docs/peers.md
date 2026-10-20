@@ -66,18 +66,43 @@ cot-r ALL=(root) NOPASSWD: /usr/bin/systemctl start cot-r-hostapd.service
 
 Installed by `cot-r prepare`. Coordinator keeps its AP running.
 
+## Prerequisite: shared peer token
+
+Both boards must use the **same** `/etc/cot-r/peer.token`. After prepare on board A:
+
+```bash
+# On RockPi 2 (example): copy token to RockPi 1
+sudo cat /etc/cot-r/peer.token
+# On RockPi 1:
+echo 'PASTE_SAME_TOKEN' | sudo tee /etc/cot-r/peer.token
+sudo chown root:cot-r /etc/cot-r/peer.token
+sudo chmod 0640 /etc/cot-r/peer.token
+sudo systemctl restart cot-r-mgmt
+```
+
+API tokens (`api.token`) stay per-board and different.
+
 ## Manual smoke test (two boards)
 
-On board A (API token) and after both share the same `peer.token`:
+On board A (the one that should become coordinator), after peer tokens match:
 
 ```bash
 TOKEN=$(sudo cat /etc/cot-r/api.token)
 curl -sS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/peers | python3 -m json.tool
+# Expect the other board reachable with hello.state / device_id
 curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{}' http://127.0.0.1:8080/api/v1/setup/claim | python3 -m json.tool
 ```
 
-On board B, status should show `Waiting`; hostapd inactive; OLED waiting text.
+On board B:
+
+```bash
+TOKEN=$(sudo cat /etc/cot-r/api.token)
+curl -sS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/api/v1/status | python3 -m json.tool
+# Expect: state=Waiting, role=peer, coordinator_id=<A>
+systemctl is-active cot-r-hostapd   # expect inactive
+# OLED: "Waiting for setup..."
+```
 
 Demo reset on the coordinator:
 

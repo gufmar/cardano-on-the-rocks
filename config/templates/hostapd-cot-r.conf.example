@@ -6,7 +6,7 @@ interface=wlan0
 driver=nl80211
 bridge=br0
 
-ssid=Cardano-on-the-Rocks .196
+ssid=Cardano-Rocks 2
 country_code=CH
 ieee80211d=1
 hw_mode=g
@@ -16,6 +16,9 @@ wmm_enabled=1
 
 auth_algs=1
 ignore_broadcast_ssid=0
+
+ctrl_interface=/run/hostapd
+ctrl_interface_group=cot-r
 
 wpa=2
 wpa_key_mgmt=WPA-PSK
