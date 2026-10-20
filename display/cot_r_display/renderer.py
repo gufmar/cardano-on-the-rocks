@@ -31,12 +31,14 @@ class Renderer:
         width: int = 128,
         height: int = 64,
         rotate: int = 0,
+        driver: str = "auto",
     ) -> None:
         self.bus = bus
         self.address = address
         self.width = width
         self.height = height
         self.rotate = rotate
+        self.driver = (driver or "auto").strip().lower()
         self.device: Any = NullDevice()
         self.hardware_ok = False
         self._font = None
@@ -45,21 +47,43 @@ class Renderer:
     def _init_device(self) -> None:
         try:
             from luma.core.interface.serial import i2c
-            from luma.oled.device import ssd1306
+            from luma.oled import device as oled_dev
         except ImportError as e:
             log.warning("luma.oled not available: %s; running null renderer", e)
             return
-        try:
-            serial = i2c(port=self.bus, address=self.address)
-            self.device = ssd1306(
-                serial, width=self.width, height=self.height, rotate=self.rotate
-            )
-            self.hardware_ok = True
-            log.info("SSD1306 ready on i2c-%s addr=%s", self.bus, hex(self.address))
-        except Exception as e:  # noqa: BLE001 - hardware may be absent
-            log.warning("OLED init failed (continuing without panel): %s", e)
-            self.device = NullDevice()
-            self.hardware_ok = False
+        if self.driver in ("ssd1306", "sh1106"):
+            candidates = [self.driver]
+        else:
+            # Many "SSD1306" shop listings are actually SH1106 silicon.
+            candidates = ["ssd1306", "sh1106"]
+        last: Optional[Exception] = None
+        for name in candidates:
+            cls = getattr(oled_dev, name, None)
+            if cls is None:
+                continue
+            try:
+                serial = i2c(port=self.bus, address=self.address)
+                self.device = cls(
+                    serial,
+                    width=self.width,
+                    height=self.height,
+                    rotate=self.rotate,
+                )
+                self.hardware_ok = True
+                self.driver = name
+                log.info(
+                    "%s ready on i2c-%s addr=%s",
+                    name.upper(),
+                    self.bus,
+                    hex(self.address),
+                )
+                return
+            except Exception as e:  # noqa: BLE001 - try next driver / absent panel
+                last = e
+                continue
+        log.warning("OLED init failed (continuing without panel): %s", last)
+        self.device = NullDevice()
+        self.hardware_ok = False
 
     def _canvas(self):
         if not self.hardware_ok:

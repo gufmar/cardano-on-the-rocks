@@ -240,6 +240,7 @@ cot_r_ensure_device_identity() {
   fi
 
   cot_r_write_device_env_address "$ip" "$id"
+  cot_r_apply_hostname "$id"
   # Suggest persisting MAC map entry for next reinstall.
   if [[ -n "$mac" ]] && ! cot_r_lookup_mac_map >/dev/null 2>&1; then
     cot_r_warn "Consider adding to ${COT_R_DEVICE_MACS_MAP}:"
@@ -256,6 +257,60 @@ cot_r_mgmt_ipv4_for_ssid() {
     return 0
   fi
   cot_r_lease_ipv4
+}
+
+cot_r_sanitize_hostname() {
+  # RFC-ish short hostname: lowercase, [a-z0-9-], max 63.
+  local raw="${1:-}"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
+  while [[ "$raw" == -* ]]; do raw="${raw#-}"; done
+  while [[ "$raw" == *- ]]; do raw="${raw%-}"; done
+  [[ -n "$raw" ]] || raw="rockpi"
+  printf '%s\n' "${raw:0:63}"
+}
+
+cot_r_apply_hostname() {
+  # Set Linux hostname from COT_R_DEVICE_ID (rockpi-1 / rockpi-2 / rockpi-3).
+  require_root
+  local desired current hosts_tmp
+  desired="$(cot_r_sanitize_hostname "${1:-}")"
+  [[ -n "$desired" ]] || return 0
+  current="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)"
+  if [[ "$current" == "$desired" ]]; then
+    cot_r_info "Hostname already ${desired}"
+  else
+    if command -v hostnamectl >/dev/null 2>&1; then
+      hostnamectl set-hostname "$desired"
+    else
+      printf '%s\n' "$desired" >/etc/hostname
+      hostname "$desired" 2>/dev/null || true
+    fi
+    cot_r_ok "Hostname set to ${desired} (was ${current:-unknown})"
+  fi
+  # Keep Debian/Armbian 127.0.1.1 mapping in sync (avoids stale rockpi-4b).
+  if [[ -f /etc/hosts ]]; then
+    hosts_tmp="$(mktemp)"
+    python3 - "$desired" /etc/hosts "$hosts_tmp" <<'PY'
+import sys
+from pathlib import Path
+name, src, dst = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+lines = src.read_text(encoding="utf-8").splitlines(keepends=True)
+out = []
+seen = False
+for line in lines:
+    stripped = line.lstrip()
+    if stripped.startswith("127.0.1.1"):
+        out.append(f"127.0.1.1\t{name}\n")
+        seen = True
+        continue
+    out.append(line)
+if not seen:
+    out.append(f"127.0.1.1\t{name}\n")
+dst.write_text("".join(out), encoding="utf-8")
+PY
+    install -m 0644 "$hosts_tmp" /etc/hosts
+    rm -f "$hosts_tmp"
+  fi
 }
 
 cot_r_write_device_env_address() {
@@ -377,7 +432,9 @@ cot_r_cmd_net_set_address() {
   if [[ ! "$ip" =~ ^172\.27\.213\.(194|195|196)$ ]]; then
     cot_r_warn "Address ${ip} is outside the documented RockPi reservations (.194/.195/.196)"
   fi
+  [[ -n "$device_id" ]] || device_id="$(cot_r_default_device_id_for_ip "$ip")"
   cot_r_write_device_env_address "$ip" "$device_id"
+  cot_r_apply_hostname "$device_id"
   # Re-apply for current mode
   if [[ -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
     cot_r_info "AP enabled: rewriting bridge static address + SSID/hostapd"

@@ -51,11 +51,24 @@ Example for RockPi 2:
 
 Repeat for `rockpi1` / `rockpi3` with each board’s own pubkey.
 
-Verify from RockPi 2:
+Verify from each RockPi (use that board’s mAP user: `rockpi1` / `rockpi2` / `rockpi3`):
 
 ```bash
-sudo -u cot-r ssh -i /etc/cot-r/ssh/id_ed25519 -o BatchMode=yes \
+# First contact: accept-new is required with BatchMode (no TTY prompt).
+sudo -u cot-r mkdir -p /var/lib/cot-r/home/.ssh
+sudo -u cot-r ssh -i /etc/cot-r/ssh/id_ed25519 \
+  -o BatchMode=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile=/var/lib/cot-r/home/.ssh/known_hosts \
   rockpi2@172.27.213.1 '/system identity print'
+```
+
+If you previously connected to `172.27.213.1` with a different host key:
+
+```bash
+sudo -u cot-r ssh-keygen -R 172.27.213.1 \
+  -f /var/lib/cot-r/home/.ssh/known_hosts
+# then re-run the ssh command above
 ```
 
 Wireless scan (ROS7) used by the setup wizard:

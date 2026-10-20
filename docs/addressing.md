@@ -28,6 +28,9 @@ Identity is resolved at `prepare` time, in order:
 3. Existing `device.env` (interactive confirm when MAC is not in the map)
 4. Interactive menu (TTY) choosing `.195` / `.196` / `.194`
 
+`prepare` also sets the Linux hostname to `COT_R_DEVICE_ID` (`rockpi-1` /
+`rockpi-2` / `rockpi-3`) and updates the `127.0.1.1` line in `/etc/hosts`.
+
 - **AP enabled:** static address on `br0` (MAC still = `end0` permanent MAC).
 - **AP disabled:** static address on `end0` via `00-cot-r-end0-static.network`.
 

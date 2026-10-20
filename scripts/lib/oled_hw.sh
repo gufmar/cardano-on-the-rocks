@@ -13,15 +13,26 @@ cot_r_list_i2c_buses() {
   done
 }
 
-# Probe a single bus for common SSD1306 addresses. Prints "bus=N addr=0xXX" if found.
+# Probe a single bus for common OLED addresses. Prints "bus=N addr=0xXX" if found.
+# Prefer i2cdetect (address ACK). Avoid i2cget … 0x00 alone: some SSD1306/SH1106
+# clones ACK on the bus but NAK register reads, which falsely reports "not found".
 cot_r_probe_bus_ssd1306() {
   local busdev="$1"
-  local busnum addr
+  local busnum addr table
   busnum="${busdev##*/i2c-}"
   command -v i2cdetect >/dev/null 2>&1 || return 1
-  # Restrict scan window: 0x3c and 0x3d only (SSD1306 typical).
+  table="$(i2cdetect -y "$busnum" 2>/dev/null)" || return 1
+  for addr in 3c 3d; do
+    # Match a matrix cell (e.g. "3c"), not the row label "30:".
+    if printf '%s\n' "$table" | grep -Eq "(^|[[:space:]])${addr}([[:space:]]|$)"; then
+      printf 'bus=%s addr=0x%s\n' "$busnum" "$addr"
+      return 0
+    fi
+  done
+  # Fallback for odd i2cdetect builds: try a plain presence get.
   for addr in 0x3c 0x3d; do
-    if i2cget -y "$busnum" "$addr" 0x00 >/dev/null 2>&1; then
+    if i2cget -y "$busnum" "$addr" 0x00 >/dev/null 2>&1 \
+      || i2cget -y "$busnum" "$addr" >/dev/null 2>&1; then
       printf 'bus=%s addr=%s\n' "$busnum" "$addr"
       return 0
     fi
@@ -52,6 +63,7 @@ cot_r_discover_oled() {
 cot_r_write_oled_config() {
   local bus="$1"
   local addr="$2"
+  local driver="${3:-ssd1306}"
   local conf="${COT_R_ETC_DIR}/display.env"
   mkdir -p "${COT_R_ETC_DIR}"
   if [[ -f "$conf" ]]; then
@@ -62,6 +74,7 @@ cot_r_write_oled_config() {
 # Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
 COT_R_I2C_BUS=${bus}
 COT_R_I2C_ADDRESS=${addr}
+COT_R_DISPLAY_DRIVER=${driver}
 COT_R_DISPLAY_WIDTH=128
 COT_R_DISPLAY_HEIGHT=64
 COT_R_DISPLAY_SOCKET=${COT_R_DISPLAY_SOCK}
@@ -73,7 +86,7 @@ EOF
   chown "root:${COT_R_DEPLOY_USER}" "$conf" 2>/dev/null || \
     chown "root:${COT_R_DISPLAY_USER}" "$conf" 2>/dev/null || true
   cot_r_manifest_add_file "$conf" "config"
-  cot_r_ok "Wrote ${conf} (bus=${bus} addr=${addr})"
+  cot_r_ok "Wrote ${conf} (bus=${bus} addr=${addr} driver=${driver})"
 }
 
 cot_r_oled_selftest() {
@@ -97,40 +110,60 @@ cot_r_oled_selftest() {
     addr="${COT_R_I2C_ADDRESS}"
   fi
 
-  if ! python3 - <<PY
+  local out
+  if ! out="$(python3 - <<PY
 import sys
 try:
     from luma.core.interface.serial import i2c
-    from luma.oled.device import ssd1306
     from luma.core.render import canvas
-    from PIL import ImageFont
+    from luma.oled import device as oled_dev
 except ImportError as e:
     print("missing python deps:", e, file=sys.stderr)
     sys.exit(2)
 
 bus = int("${bus}")
 addr = int("${addr}", 0)
-try:
-    serial = i2c(port=bus, address=addr)
-    device = ssd1306(serial, width=128, height=64)
-    with canvas(device) as draw:
-        draw.rectangle(device.bounding_box, outline="white", fill="black")
-        draw.text((4, 8), "Cardano on", fill="white")
-        draw.text((4, 24), "the Rocks", fill="white")
-        draw.text((4, 44), "OLED OK", fill="white")
-    print(f"oled-ok bus={bus} addr={hex(addr)}")
-except Exception as e:
-    print(f"oled-error: {e}", file=sys.stderr)
-    sys.exit(1)
+forced = "${COT_R_DISPLAY_DRIVER:-}".strip().lower()
+candidates = []
+if forced in ("ssd1306", "sh1106"):
+    candidates = [forced]
+else:
+    candidates = ["ssd1306", "sh1106"]
+
+last = None
+for name in candidates:
+    cls = getattr(oled_dev, name, None)
+    if cls is None:
+        continue
+    try:
+        serial = i2c(port=bus, address=addr)
+        device = cls(serial, width=128, height=64)
+        with canvas(device) as draw:
+            draw.rectangle(device.bounding_box, outline="white", fill="black")
+            draw.text((4, 8), "Cardano on", fill="white")
+            draw.text((4, 24), "the Rocks", fill="white")
+            draw.text((4, 44), f"OLED OK ({name})", fill="white")
+        print(f"oled-ok bus={bus} addr={hex(addr)} driver={name}")
+        sys.exit(0)
+    except Exception as e:
+        last = e
+print(f"oled-error: {last}", file=sys.stderr)
+sys.exit(1)
 PY
-  then
+)"; then
     local rc=$?
     if [[ "$rc" -eq 2 ]]; then
       cot_r_warn "Display Python packages missing; install via prepare"
       return 0
     fi
     cot_r_warn "OLED self-test failed (non-fatal for networking): exit ${rc}"
+    printf '%s\n' "$out" >&2
     return 0
+  fi
+  printf '%s\n' "$out"
+  # Persist whichever driver worked (ssd1306|sh1106).
+  if [[ "$out" =~ driver=([a-z0-9]+) ]]; then
+    cot_r_write_oled_config "$bus" "$addr" "${BASH_REMATCH[1]}"
   fi
   cot_r_ok "OLED self-test rendered successfully"
 }

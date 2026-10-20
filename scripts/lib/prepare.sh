@@ -33,14 +33,15 @@ cot_r_cmd_prepare() {
   cot_r_ensure_device_id_file
   cot_r_ensure_api_token
   cot_r_ensure_peer_token
-  cot_r_ensure_map_ssh_key
   cot_r_install_mgmt_sudoers
   cot_r_fix_etc_permissions
-  # Resolve THIS board's reserved IP before any static network write.
+  # Resolve THIS board's reserved IP + hostname before SSH key / static network.
   # Never invent .196 from a shared example template.
   if cot_r_ensure_device_identity; then
     identity_ok=yes
   fi
+  # Key comment uses hostname; create after identity rename.
+  cot_r_ensure_map_ssh_key
   # If a concrete reserved address is configured and AP is off, prefer static end0.
   if [[ "$identity_ok" == "yes" && ! -f "${COT_R_STATE_DIR}/ap-enabled" ]]; then
     if cot_r_reserved_ipv4 >/dev/null 2>&1; then
@@ -72,7 +73,8 @@ cot_r_cmd_prepare() {
       cot_r_oled_selftest
       systemctl try-restart "${COT_R_DISPLAY_UNIT}" 2>/dev/null || true
     else
-      cot_r_warn "i2c-7 present but no SSD1306 at 0x3c/0x3d; check wiring"
+      cot_r_warn "i2c-7 present but no OLED ACK at 0x3c/0x3d (i2cdetect); check module pin silk / wiring"
+      cot_r_warn "Run: sudo i2cdetect -y 7   then sudo ./scripts/cot-r oled-test (see docs/oled.md)"
     fi
   else
     cot_r_warn "I2C7 device node not present yet"
@@ -108,6 +110,7 @@ PY
   else
     cot_r_warn "Reserved IP unset; static addressing skipped"
   fi
+  echo "Hostname: $(hostname -s 2>/dev/null || hostname || echo '?')"
   echo "Management API: http://<device>:8080/api/v1/  (token in ${COT_R_API_TOKEN_FILE})"
   if [[ "$reboot_needed" == "yes" ]]; then
     cot_r_warn "ACTION REQUIRED: reboot this device when convenient, then re-run: sudo ./scripts/cot-r prepare"

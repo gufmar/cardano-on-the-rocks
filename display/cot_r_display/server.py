@@ -97,7 +97,10 @@ class DisplayServer:
         bus = _env_int("COT_R_I2C_BUS", 7)
         addr = _env_int("COT_R_I2C_ADDRESS", 0x3C)
         rotate = _env_int("COT_R_DISPLAY_ORIENTATION", 0)
-        self.renderer = Renderer(bus=bus, address=addr, rotate=rotate)
+        driver = os.environ.get("COT_R_DISPLAY_DRIVER", "auto")
+        self.renderer = Renderer(
+            bus=bus, address=addr, rotate=rotate, driver=driver
+        )
         self._q: List[_Queued] = []
         self._q_lock = threading.Lock()
         self._seq = 0

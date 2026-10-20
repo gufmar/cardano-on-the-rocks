@@ -24,6 +24,13 @@ MAP_HOST = os.environ.get("COT_R_MAP_HOST", "172.27.213.1")
 WLAN_STA = os.environ.get("COT_R_MAP_WLAN", "wlan1")
 SEC_PROFILE = os.environ.get("COT_R_MAP_SEC_PROFILE", "uplink")
 SSH_TIMEOUT = int(os.environ.get("COT_R_MAP_SSH_TIMEOUT", "20"))
+# cot-r home is /var/lib/cot-r/home; keep known_hosts there for BatchMode+accept-new.
+KNOWN_HOSTS = Path(
+    os.environ.get(
+        "COT_R_MAP_KNOWN_HOSTS",
+        "/var/lib/cot-r/home/.ssh/known_hosts",
+    )
+)
 
 
 def _exists_file(path: Path) -> bool:
@@ -147,6 +154,10 @@ def run_ssh(script: str, *, timeout: int = SSH_TIMEOUT) -> Dict[str, Any]:
             "ok": False,
             "error": f"SSH key missing at {SSH_KEY}; run prepare and install pubkey on mAP",
         }
+    try:
+        KNOWN_HOSTS.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     cmd = [
         "ssh",
         "-i",
@@ -155,6 +166,8 @@ def run_ssh(script: str, *, timeout: int = SSH_TIMEOUT) -> Dict[str, Any]:
         "BatchMode=yes",
         "-o",
         "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"UserKnownHostsFile={KNOWN_HOSTS}",
         "-o",
         f"ConnectTimeout={min(timeout, 10)}",
         "-o",
