@@ -42,13 +42,18 @@ switches and stays on step 2 until demo reset:
 1. AP enabled (`ap-prepare` / `ap-enable`)
 2. hostapd `ctrl_interface` + `ctrl_interface_group=cot-r` (written by ap-prepare)
 3. `cot-r-mgmt` running (polls stations about every 2s)
-4. Short SSID + 10-char PSK so the half-panel QR stays ≥2px
+4. Short SSID (`Cardano-Rocks N`) + **10-char** PSK so the QR column (64×64) stays ≥2px
 
-After changing hostapd config:
+A 16-char leftover PSK makes ~35 modules → **1px** on the half panel (unscannable).
+`ap-prepare` now auto-rotates any PSK longer than 10 characters.
+
+After changing hostapd / display code:
 
 ```bash
-sudo ./scripts/cot-r ap-prepare
-sudo systemctl restart cot-r-hostapd cot-r-mgmt cot-r-display
+sudo ./scripts/cot-r prepare
+sudo ./scripts/cot-r ap-prepare    # also shortens overlong PSK
+sudo systemctl restart cot-r-hostapd cot-r-display cot-r-mgmt
+sudo ./scripts/cot-r ap-show-psk   # optional: confirm new PSK
 ```
 
 Waiting peers (stage 8) stop hostapd and show “Waiting for setup…” instead.

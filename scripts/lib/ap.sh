@@ -626,12 +626,13 @@ cot_r_cmd_ap_prepare() {
     cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}" --force
   else
     cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}"
-    # Old 16-char PSKs make WIFI: QR too dense with any readable SSID; nudge rotate.
+    # Half-panel OLED onboarding needs <=10 char PSK for >=2px modules.
     if [[ -s "${COT_R_AP_PSK_FILE_DEFAULT}" ]]; then
       local plen
       plen="$(tr -d '[:space:]' <"${COT_R_AP_PSK_FILE_DEFAULT}" | wc -c)"
-      if [[ "$plen" -gt 12 ]]; then
-        cot_r_warn "Existing PSK is ${plen} chars; OLED Wi-Fi QR needs <=12. Re-run: sudo ./scripts/cot-r ap-prepare --rotate-psk"
+      if [[ "$plen" -gt 10 ]]; then
+        cot_r_warn "Existing PSK is ${plen} chars; rotating to 10 chars so OLED step-1 QR stays scannable"
+        cot_r_generate_psk "${COT_R_AP_PSK_FILE_DEFAULT}" --force
       fi
     fi
   fi
