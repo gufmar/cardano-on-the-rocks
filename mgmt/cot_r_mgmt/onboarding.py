@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from cot_r_mgmt import display_client
 from cot_r_mgmt import peers
+from cot_r_mgmt.association import list_stations
 from cot_r_mgmt.state import StateStore
 from cot_r_mgmt.wizard import (
     STEP_CONFIGURING,
@@ -27,8 +27,6 @@ AP_PSK_FILE = Path(os.environ.get("COT_R_AP_PSK_FILE", str(ETC_DIR / "ap.psk")))
 AP_ENV = ETC_DIR / "ap.env"
 AP_ENABLED_FLAG = Path(os.environ.get("COT_R_STATE_DIR", "/var/lib/cot-r")) / "ap-enabled"
 POLL_SECONDS = float(os.environ.get("COT_R_ONBOARD_POLL", "2.0"))
-WLAN_IF = os.environ.get("COT_R_WLAN_IF", "wlan0")
-HOSTAPD_CLI = os.environ.get("COT_R_HOSTAPD_CLI", "/usr/sbin/hostapd_cli")
 MGMT_PORT = int(os.environ.get("COT_R_MGMT_PORT", "8080"))
 
 
@@ -99,31 +97,6 @@ def board_digit() -> str:
         return "3"
     last = reserved.rsplit(".", 1)[-1] if reserved else ""
     return {"195": "1", "196": "2", "194": "3"}.get(last, "?")
-
-
-def list_stations() -> List[str]:
-    if not Path(HOSTAPD_CLI).is_file() and not __import__("shutil").which("hostapd_cli"):
-        return []
-    cli = HOSTAPD_CLI if Path(HOSTAPD_CLI).is_file() else "hostapd_cli"
-    try:
-        proc = subprocess.run(
-            [cli, "-i", WLAN_IF, "list_sta"],
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        log.debug("hostapd_cli failed: %s", e)
-        return []
-    if proc.returncode != 0:
-        return []
-    macs: List[str] = []
-    for line in (proc.stdout or "").splitlines():
-        mac = line.strip().lower()
-        if len(mac) == 17 and mac.count(":") == 5:
-            macs.append(mac)
-    return macs
 
 
 def ap_is_enabled() -> bool:

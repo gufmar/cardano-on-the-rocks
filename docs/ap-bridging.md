@@ -115,7 +115,5 @@ With `Cardano-Rocks N` + a 10-char PSK the payload fits 128×64 at ≥2px module
 
 ## Next after AP works
 
-- OLED onboarding (Wi‑Fi QR → setup URL after first STA) — see [onboarding-oled.md](onboarding-oled.md)
-- Peer coordination (peers hide QR / disable AP after coordinator ack) — see [peers.md](peers.md)
-- Association reporting for portal handoff
-- Local setup UI + Wi-Fi QR on OLED (with readable fallback)
+Foundation items above are done. Next product work is Cardano node deploy via
+the wizard: [roadmap.md](roadmap.md), [node-candidates.md](node-candidates.md).

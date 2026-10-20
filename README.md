@@ -21,11 +21,12 @@ Incremental build. Working on RockPi 2 today:
 - Management API with identity, boot ID, status, and demo reset
 - Bridged AP tooling (`ap-prepare` / `ap-enable --confirm` / `ap-disable`)
 - Peer coordination (claim / lease / Waiting AP standby); see [docs/peers.md](docs/peers.md)
-
-Next: richer setup UI after uplink, Cardano demo application.
-
-Local setup wizard (confirm → uplink via mAP SSH → adopt neighbours): see
-[docs/setup-wizard.md](docs/setup-wizard.md).
+- Local setup wizard (confirm → mAP uplink → adopt/release neighbours); see
+  [docs/setup-wizard.md](docs/setup-wizard.md)
+Next: wizard step 3 node catalog (Amaru first), then deploy / relay roles /
+LAN peering / WireGuard. See [docs/roadmap.md](docs/roadmap.md) and
+[docs/node-candidates.md](docs/node-candidates.md). Captive-portal stages from
+the original briefing are skipped (RockPi AP + OLED QR).
 
 ## Hardware
 
@@ -162,6 +163,8 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/ap-bridging.md](docs/ap-bridging.md) | Bridged AP design |
 | [docs/onboarding-oled.md](docs/onboarding-oled.md) | OLED step 1–3 (Wi‑Fi / setup URL / gear) |
 | [docs/setup-wizard.md](docs/setup-wizard.md) | Phone setup wizard + uplink + adopt |
+| [docs/roadmap.md](docs/roadmap.md) | Revised stages (nodes, roles, WireGuard) |
+| [docs/node-candidates.md](docs/node-candidates.md) | Amaru / Dingo / Yano / Gerolamo vs 4 GiB / 32 GiB |
 | [docs/map-ssh.md](docs/map-ssh.md) | Per-node SSH keys for mAP uplink control |
 | [docs/addressing.md](docs/addressing.md) | Fixed RockPi management IPs |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |

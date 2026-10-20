@@ -58,13 +58,20 @@ Enable only via `cot-r ap-enable --confirm` (not baseline prepare).
 
 Coordinator keeps its AP; peers disable theirs only after acknowledging a valid coordinator.
 
-## Association reporting (planned)
+## Association reporting (optional diagnostic)
 
-On a shared bridge the mAP sees the phone MAC/IP, not which RockPi AP served it.
-Each RockPi must report authenticated association events for portal handoff.
+Originally planned for captive-portal handoff on a shared bridge. That path is
+**skipped**: phones join the RockPi AP and open `/setup` via OLED QR.
 
-VLAN-per-AP is an agreed fallback only if shared-LAN association reporting fails
-reliability requirements. Do not introduce VLANs silently.
+The management service still exposes STA polling for debugging:
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/v1/associations` | API Bearer | Local hostapd stations |
+| `GET /api/v1/association/resolve?mac=` | API Bearer | Cluster MAC → serving RockPi |
+| `GET /api/v1/peer/association/lookup?mac=` | peer Bearer | Peer-to-peer local lookup |
+
+Not used by the setup wizard.
 
 ## Secrets
 

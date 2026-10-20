@@ -10,8 +10,11 @@ Phone-driven configuration on the RockPi that served the Wi‑Fi (no mAP captive
 4. OLED step **3**: gear icon (configuring). Optional `controlled by node X` when adopted.
 5. Web: check Internet; if needed, SSH to mAP → scan SSIDs → connect (or skip with warning)
 6. Web: discover neighbours still on steps 1–2 → adopt into this wizard
+7. Web: **Node deployment** (sneak peek): catalog of Cardano implementations;
+   Amaru is the first deployable target; roles and install come next
 
-Return to the uplink page anytime from the done screen.
+Use the top-right step menu to jump between Start, Internet uplink, Neighbour
+nodes, and Nodes (after confirm).
 
 ## Apply
 

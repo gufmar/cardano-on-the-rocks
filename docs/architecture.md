@@ -35,11 +35,17 @@ hints, not trust.
 | Deploy clone + update | `/opt/cot-r/src`, rollback via `deploy.json` | Done (foundation) |
 | Bridged AP (`ap-prepare` / `ap-enable`) | Bridge wlan0 to end0; mAP DHCP | Done (foundation) |
 | OLED onboarding | Steps 1–3 (Wi‑Fi QR → setup URL → gear) | Done (foundation) |
-| Setup wizard | Confirm, uplink via mAP SSH, adopt peers | Done (foundation) |
-| Peer coordination | Coordinator lease, heartbeats | Done (foundation) |
-| Richer setup UI / demo app | Post-uplink Cardano flows | Next |
-| Local setup UI | Responsive offline page | Later |
-| Demo application | Cardano demo after foundations | Later |
+| Setup wizard | Confirm, uplink via mAP SSH, adopt/release peers | Done (stage 10) |
+| Peer coordination | Coordinator lease, heartbeats | Done (stage 8) |
+| Captive portal / guest portal | Original briefing 11–12 | **Skipped** (RockPi AP + OLED QR) |
+| Association reporting | Optional hostapd STA diagnostic | Optional (not required for setup) |
+| Node catalog (wizard step 3) | Choose Amaru / Dingo / … per board | Next (sneak peek in UI) |
+| Amaru deploy | aarch64 package + systemd on RockPi | Next |
+| Roles + LAN peers | relay / producer; fixed neighbour peering | Later |
+| Relay WireGuard egress | Public IP:port behind NAT / hotel Wi‑Fi | Later |
+| Producer secrets UI | Stake pool keys / wallets | Later |
+
+Full stage table: [roadmap.md](roadmap.md). Candidate fit: [node-candidates.md](node-candidates.md).
 
 ## Process isolation
 
@@ -67,9 +73,12 @@ session after reset.
 | GET | `/api/v1/status` | API Bearer | Identity, boot ID, state, role, deploy commit |
 | GET | `/api/v1/about` | API Bearer | Attribution and licence |
 | GET | `/api/v1/peers` | API Bearer | Discover reserved peers |
+| GET | `/api/v1/associations` | API Bearer | Local hostapd stations (MAC, generation) |
+| GET | `/api/v1/association/resolve?mac=` | API Bearer | Cluster-wide: which RockPi serves MAC |
 | POST | `/api/v1/setup/claim` | API Bearer | Become coordinator; announce to peers |
 | POST | `/api/v1/reset` | API Bearer | Demo reset (`scope=demo` only) |
 | GET | `/api/v1/peer/hello` | peer Bearer | Peer identity exchange |
+| GET | `/api/v1/peer/association/lookup?mac=` | peer Bearer | Local MAC lookup for peers |
 | POST | `/api/v1/peer/claim` | peer Bearer | Accept coordinator claim → Waiting |
 | POST | `/api/v1/peer/heartbeat` | peer Bearer | Refresh Waiting lease |
 | POST | `/api/v1/peer/release` | peer Bearer | Session ended → Initial |

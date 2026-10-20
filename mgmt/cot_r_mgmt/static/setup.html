@@ -36,14 +36,24 @@ body {
   width: 100%;
   margin: 0 auto;
   padding: 1.1rem 1rem 0;
+  position: relative;
 }
+.topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+  margin: 0 0 .85rem;
+  min-height: 2rem;
+}
+.topbar-brand { flex: 1; min-width: 0; }
 .brand-hero {
   font-family: inherit;
   font-size: clamp(1.85rem, 6vw, 2.45rem);
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -.02em;
-  margin: .35rem 0 1rem;
+  margin: .35rem 0 0;
   color: var(--brand);
 }
 .brand-bar {
@@ -51,10 +61,42 @@ body {
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -.01em;
-  margin: 0 0 .85rem;
+  margin: .15rem 0 0;
   color: var(--brand);
 }
 .brand-bar.hidden, .brand-hero.hidden { display: none !important; }
+.nav-wrap { position: relative; flex: 0 0 auto; margin-top: .15rem; }
+.nav-menu-btn {
+  width: 2.4rem; height: 2.4rem; padding: 0;
+  display: grid; place-items: center;
+  background: #2a3a58; border-radius: 10px;
+}
+.nav-menu-btn svg { display: block; }
+.nav-menu {
+  position: absolute;
+  top: calc(100% + .35rem);
+  right: 0;
+  min-width: 12.5rem;
+  background: var(--panel);
+  border: 1px solid #2b3c5c;
+  border-radius: 12px;
+  padding: .35rem;
+  z-index: 40;
+  box-shadow: 0 10px 28px rgba(0,0,0,.35);
+}
+.nav-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  font-weight: 500;
+  padding: .55rem .65rem;
+  border-radius: 8px;
+}
+.nav-menu button:hover { background: #243352; }
+.nav-menu button:disabled { opacity: .4; }
+.nav-menu button.active { color: var(--brand); font-weight: 700; }
 h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
 p, li { color: var(--muted); line-height: 1.45; }
 .card {
@@ -122,6 +164,31 @@ input[type=password], input[type=text] {
   width: 100%;
 }
 .peer-row input { margin-top: .2rem; }
+.node-list { display: flex; flex-direction: column; gap: .55rem; margin: .85rem 0 0; }
+.node-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .35rem .75rem;
+  align-items: start;
+  padding: .75rem .8rem;
+  border: 1px solid #2b3c5c;
+  border-radius: 12px;
+  background: #121b2d;
+}
+.node-card.target { border-color: #2a6a3a; background: #13261c; }
+.node-card h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.node-card .lang { color: var(--muted); font-size: .8rem; font-weight: 500; }
+.node-card p {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: .85rem;
+}
+.node-card .badge { align-self: start; }
 .site-footer {
   margin-top: auto;
   padding: .85rem 1rem 1.25rem;
@@ -133,8 +200,27 @@ input[type=password], input[type=text] {
 </head>
 <body>
 <div class="shell">
-  <div id="brandHero" class="brand-hero">Cardano on the Rocks</div>
-  <div id="brandBar" class="brand-bar hidden">Cardano on the Rocks</div>
+  <div class="topbar">
+    <div class="topbar-brand">
+      <div id="brandHero" class="brand-hero">Cardano on the Rocks</div>
+      <div id="brandBar" class="brand-bar hidden">Cardano on the Rocks</div>
+    </div>
+    <div class="nav-wrap">
+      <button type="button" id="navMenuBtn" class="nav-menu-btn" aria-label="Wizard steps" aria-expanded="false" aria-controls="navMenu">
+        <svg width="18" height="14" viewBox="0 0 18 14" aria-hidden="true">
+          <rect y="0" width="18" height="2" rx="1" fill="currentColor"/>
+          <rect y="6" width="18" height="2" rx="1" fill="currentColor"/>
+          <rect y="12" width="18" height="2" rx="1" fill="currentColor"/>
+        </svg>
+      </button>
+      <nav id="navMenu" class="nav-menu hidden" aria-label="Wizard steps">
+        <button type="button" data-nav="welcome">Start</button>
+        <button type="button" data-nav="uplink">Internet uplink</button>
+        <button type="button" data-nav="adopt">Neighbour nodes</button>
+        <button type="button" data-nav="nodes">Nodes</button>
+      </nav>
+    </div>
+  </div>
 
   <section id="view-welcome" class="card">
     <h2>You are about to configure this node</h2>
@@ -188,9 +274,33 @@ input[type=password], input[type=text] {
   </section>
 
   <section id="view-done" class="card hidden">
-    <h2>Configuring</h2>
-    <p>This node is in setup mode (OLED step 3). Uplink and neighbours can be revisited from the links below.</p>
+    <h2>Cardano nodes</h2>
+    <p>Pick which implementation to deploy on each RockPi. Selection and install land next; this is a sneak peek of the catalog.</p>
+    <div class="node-list" id="nodeCatalog">
+      <article class="node-card target" data-node="amaru">
+        <h3>Amaru <span class="lang">Rust</span></h3>
+        <span class="badge adopted">first target</span>
+        <p>Official min ~2 GiB RAM, aarch64 packages. Fits 4 GiB RockPi; prefer tip/Mithril bootstrap on 32 GiB eMMC.</p>
+      </article>
+      <article class="node-card" data-node="dingo">
+        <h3>Dingo <span class="lang">Go</span></h3>
+        <span class="badge">later</span>
+        <p>arm64 releases; core mode aims ≤1 GiB RSS. Testnet-first today.</p>
+      </article>
+      <article class="node-card" data-node="yano">
+        <h3>Yano <span class="lang">Java</span></h3>
+        <span class="badge">later</span>
+        <p>Quarkus data node; GraalVM native needed before enabling on 4 GiB.</p>
+      </article>
+      <article class="node-card" data-node="gerolamo">
+        <h3>Gerolamo <span class="lang">TypeScript</span></h3>
+        <span class="badge">later</span>
+        <p>Bun + SQLite soft ledger. Measure RSS + DB growth on RockPi before enable.</p>
+      </article>
+    </div>
+    <p class="meta" style="margin-top:.85rem">Per-board role (relay / producer), LAN neighbour peering, and WireGuard for NAT relays follow after Amaru install works.</p>
     <div class="row">
+      <button id="btnDeployPreview" type="button" disabled title="Amaru install not wired yet">Deploy Amaru (soon)</button>
       <button id="btnBackUplink" type="button" class="secondary">Uplink again</button>
       <button id="btnBackAdopt" type="button" class="secondary">Neighbours again</button>
     </div>
@@ -208,17 +318,42 @@ input[type=password], input[type=text] {
     selectedSec: null,
     selectedPskKnown: false,
     changingPsk: false,
+    currentView: "view-welcome",
   };
 
   const $ = (id) => document.getElementById(id);
+  const closeNav = () => {
+    $("navMenu").classList.add("hidden");
+    $("navMenuBtn").setAttribute("aria-expanded", "false");
+  };
   const show = (id) => {
     document.querySelectorAll(".shell > section").forEach(s => s.classList.add("hidden"));
     $(id).classList.remove("hidden");
+    state.currentView = id;
     const welcome = id === "view-welcome";
     $("brandHero").classList.toggle("hidden", !welcome);
     $("brandBar").classList.toggle("hidden", welcome);
+    closeNav();
+    paintNavActive();
   };
   const err = (msg) => { $("err").textContent = msg || ""; };
+
+  function paintNavActive() {
+    const map = {
+      "view-welcome": "welcome",
+      "view-uplink": "uplink",
+      "view-adopt": "adopt",
+      "view-done": "nodes",
+    };
+    const key = map[state.currentView] || "";
+    const confirmed = !!(state.session || (state.device && state.device.confirmed));
+    document.querySelectorAll("#navMenu [data-nav]").forEach((btn) => {
+      const nav = btn.getAttribute("data-nav");
+      btn.classList.toggle("active", nav === key);
+      // Before confirm, only Start is reachable.
+      btn.disabled = !confirmed && nav !== "welcome";
+    });
+  }
 
   async function api(path, opts = {}) {
     const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
@@ -234,6 +369,7 @@ input[type=password], input[type=text] {
   function paintDevice(d) {
     state.device = d;
     $("deviceMeta").textContent = `${d.device_label || "node"} · ${d.mgmt_ipv4 || "?"}`;
+    paintNavActive();
   }
 
   function setInetOkUi(ok) {
@@ -540,11 +676,47 @@ input[type=password], input[type=text] {
 
   $("btnAdoptContinue").onclick = () => show("view-done");
 
+  $("navMenuBtn").onclick = (e) => {
+    e.stopPropagation();
+    const open = $("navMenu").classList.contains("hidden");
+    $("navMenu").classList.toggle("hidden", !open);
+    $("navMenuBtn").setAttribute("aria-expanded", open ? "true" : "false");
+    paintNavActive();
+  };
+  document.addEventListener("click", (e) => {
+    const wrap = document.querySelector(".nav-wrap");
+    if (wrap && !wrap.contains(e.target)) closeNav();
+  });
+  document.querySelectorAll("#navMenu [data-nav]").forEach((btn) => {
+    btn.onclick = async () => {
+      const nav = btn.getAttribute("data-nav");
+      err("");
+      try {
+        if (nav === "welcome") {
+          show("view-welcome");
+          return;
+        }
+        if (!state.session) {
+          const d = await refreshStatus();
+          if (!d.confirmed) {
+            err("Confirm setup on Start before opening other steps.");
+            show("view-welcome");
+            return;
+          }
+        }
+        if (nav === "uplink") await goUplink();
+        else if (nav === "adopt") await loadAdopt();
+        else if (nav === "nodes" || nav === "done") show("view-done");
+      } catch (e) { err(e.message); }
+    };
+  });
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   (async function boot() {
     try {
       const d = await refreshStatus();
+      paintNavActive();
       if (d.confirmed) {
         await goUplink();
       } else {

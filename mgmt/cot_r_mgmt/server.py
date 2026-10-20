@@ -7,9 +7,12 @@ Endpoints:
   GET  /api/v1/status        (api auth)  identity + state
   GET  /api/v1/about         (api auth)  attribution / licence
   GET  /api/v1/peers         (api auth)  discovery snapshot
+  GET  /api/v1/associations  (api auth)  local hostapd stations
+  GET  /api/v1/association/resolve (api auth) cluster MAC -> serving RockPi
   POST /api/v1/setup/claim   (api auth)  become coordinator + announce
   POST /api/v1/reset         (api auth)  demo reset (not project cleanup)
   GET  /api/v1/peer/hello    (peer auth) peer identity exchange
+  GET  /api/v1/peer/association/lookup (peer auth) local MAC lookup
   POST /api/v1/peer/claim    (peer auth) accept coordinator claim
   POST /api/v1/peer/heartbeat(peer auth) refresh peer lease
   POST /api/v1/peer/release  (peer auth) session ended / leave Waiting
@@ -34,7 +37,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PARENT = os.path.dirname(_HERE)
@@ -47,6 +50,7 @@ from cot_r_mgmt import display_client  # noqa: E402
 from cot_r_mgmt import identity  # noqa: E402
 from cot_r_mgmt import internet as internetmod  # noqa: E402
 from cot_r_mgmt import routeros as ros  # noqa: E402
+from cot_r_mgmt.association import AssociationTracker  # noqa: E402
 from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
 from cot_r_mgmt.onboarding import OnboardingDisplay, board_digit  # noqa: E402
 from cot_r_mgmt import peers as peersmod  # noqa: E402
@@ -93,6 +97,11 @@ class AppContext:
             wizard=self.wizard,
         )
         self.onboarding = OnboardingDisplay(store=self.store, wizard=self.wizard)
+        self.associations = AssociationTracker(
+            device_id=self.device_id,
+            device_label=self.device_label,
+            peer_token=self.peer_token,
+        )
         log.info(
             "boot device_id=%s label=%s boot_id=%s state=%s peer_token=%s",
             self.device_id,
@@ -189,7 +198,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         assert CTX is not None
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        query = parse_qs(parsed.query)
         if path in ("/setup", "/"):
             _html_response(self, 200, _setup_page_html())
             return
@@ -408,6 +419,41 @@ class Handler(BaseHTTPRequestHandler):
                     "ok": True,
                     "peers": found,
                     "peer_token_configured": bool(CTX.peer_token),
+                },
+            )
+            return
+        if path == "/api/v1/associations":
+            if not self._require_api_auth():
+                return
+            CTX.associations.refresh()
+            _json_response(self, 200, CTX.associations.snapshot())
+            return
+        if path == "/api/v1/association/resolve":
+            if not self._require_api_auth():
+                return
+            mac = (query.get("mac") or [""])[0]
+            CTX.associations.refresh()
+            _json_response(self, 200, CTX.associations.resolve(mac))
+            return
+        if path == "/api/v1/peer/association/lookup":
+            if not self._require_peer_auth():
+                return
+            mac = (query.get("mac") or [""])[0]
+            CTX.associations.refresh()
+            local = CTX.associations.lookup_local(mac)
+            ip = peersmod.local_mgmt_ipv4()
+            port = int(os.environ.get("COT_R_MGMT_PORT", "8080"))
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "found": local is not None,
+                    "device_id": CTX.device_id,
+                    "device_label": CTX.device_label,
+                    "mgmt_ipv4": ip,
+                    "setup_url": f"http://{ip}:{port}/setup" if ip else None,
+                    "association": local,
                 },
             )
             return
@@ -915,12 +961,14 @@ def main() -> int:
     )
     CTX.coord.start()
     CTX.onboarding.start()
+    CTX.associations.start()
 
     httpd = ThreadingHTTPServer((bind, port), Handler)
     httpd.daemon_threads = True
 
     def _stop(*_a):
         log.info("shutdown requested")
+        CTX.associations.stop()
         CTX.onboarding.stop()
         CTX.coord.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
@@ -931,6 +979,7 @@ def main() -> int:
     try:
         httpd.serve_forever(poll_interval=0.5)
     finally:
+        CTX.associations.stop()
         CTX.onboarding.stop()
         CTX.coord.stop()
         httpd.server_close()

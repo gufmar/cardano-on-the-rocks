@@ -115,6 +115,6 @@ Peers should return to Initial and resume the AP when hostapd was prepared.
 
 ## Not in this stage
 
-- Phone association → automatic claim (needs portal / setup UI)
 - RouterOS uplink changes gated by coordinator
 - Whole-demo reset UX beyond best-effort peer release on API reset
+- Cardano node deploy / relay–producer roles (see [roadmap.md](roadmap.md))
