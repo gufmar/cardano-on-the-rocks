@@ -197,6 +197,8 @@ class OnboardingDisplay:
                 qr_data="",
                 qr_side="right",
                 controlled_by=wiz.get("controlled_by"),
+                priority=70,
+                ttl_ms=60000,
             )
             if self._last_step != STEP_CONFIGURING:
                 log.info(
@@ -248,6 +250,11 @@ class OnboardingDisplay:
             self._last_step = step
 
     def reset_latch(self) -> None:
+        """Force next OLED tick to re-push (does not clear wizard state)."""
         self._seen_sta = False
         self._last_step = None
+
+    def reset_wizard(self) -> None:
+        """Demo/full onboarding reset: clear latch and wizard file."""
+        self.reset_latch()
         self.wizard.reset()

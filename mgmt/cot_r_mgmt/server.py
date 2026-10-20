@@ -269,11 +269,22 @@ class Handler(BaseHTTPRequestHandler):
                 wiz = hello.get("wizard") or {}
                 role = str(wiz.get("role") or "solo")
                 controlled_by_id = str(wiz.get("controlled_by_id") or "")
+                controlled_by = str(wiz.get("controlled_by") or "")
                 ui_step = int(wiz.get("ui_step") or 1)
                 confirmed = bool(wiz.get("confirmed"))
+                my_digit = board_digit()
                 we_control = bool(
-                    (role == "adopted" and controlled_by_id == my_id)
-                    or addr in local_adopted
+                    addr in local_adopted
+                    or (
+                        role == "adopted"
+                        and controlled_by_id
+                        and controlled_by_id == my_id
+                    )
+                    or (
+                        role == "adopted"
+                        and controlled_by
+                        and controlled_by == my_digit
+                    )
                 )
                 if we_control:
                     status = "adopted"
@@ -528,8 +539,8 @@ class Handler(BaseHTTPRequestHandler):
             if not CTX.peer_token:
                 _json_response(self, 503, {"ok": False, "error": "peer.token missing"})
                 return
-            # Become coordinator for demo session, then ask peers to enter wizard step 3.
-            CTX.coord.claim_local()
+            # Wizard adoption only — do not claim_local()/announce (that forces peers into
+            # Waiting + "Waiting for setup" OLED and fights the step-3 gear screen).
             digit = board_digit()
             adopted: list = []
             results: list = []
@@ -639,8 +650,9 @@ class Handler(BaseHTTPRequestHandler):
                     controller_id=controller_id,
                 )
                 ap_control.standby()
-                CTX.store.set_state("Waiting", note=f"adopted_by={controller_id}")
-                # Push OLED step 3 immediately (do not wait for onboarding poll).
+                # Stay out of peer/Waiting claim role so coordinator loop does not
+                # overwrite OLED with "Waiting for setup".
+                CTX.store.set_state("Initial", note=f"wizard_adopted_by={controller_id}")
                 display_client.show_onboarding(
                     step=3,
                     digit="3",
@@ -648,6 +660,8 @@ class Handler(BaseHTTPRequestHandler):
                     qr_data="",
                     qr_side="right",
                     controlled_by=controller_digit,
+                    priority=70,
+                    ttl_ms=60000,
                 )
                 CTX.onboarding.reset_latch()
             except Exception as e:  # noqa: BLE001
@@ -699,6 +713,12 @@ class Handler(BaseHTTPRequestHandler):
                 CTX.store.expire_to_initial(reason=str(body.get("reason") or "wizard_free"))
                 ap_control.resume()
                 CTX.onboarding.reset_latch()
+                # Clear any leftover high-priority Waiting text immediately.
+                display_client.show_text(
+                    ["Cardano Rocks", "setup ready.", "join Wi‑Fi"],
+                    priority=75,
+                    ttl_ms=8000,
+                )
             except Exception as e:  # noqa: BLE001
                 _json_response(self, 500, {"ok": False, "error": str(e)})
                 return
@@ -803,15 +823,37 @@ class Handler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            # If we are coordinator, notify peers before clearing local session.
+            # Release peers (coordinator claim and/or wizard-adopted list).
             peer_results: list = []
+            reason = str(body.get("reason") or "api_reset")
             st_before = CTX.store.snapshot()
+            wiz_before = CTX.wizard.snapshot()
             if st_before.get("role") == "coordinator":
-                peer_results = CTX.coord.broadcast_release(
-                    reason=str(body.get("reason") or "api_reset")
+                peer_results.extend(
+                    CTX.coord.broadcast_release(reason=reason)
                 )
-            result = CTX.store.demo_reset(reason=str(body.get("reason") or "api_reset"))
+            if CTX.peer_token:
+                for p in wiz_before.get("adopted_peers") or []:
+                    addr = str(p.get("addr") or "")
+                    if not addr:
+                        continue
+                    resp = peersmod.http_json(
+                        "POST",
+                        peersmod.peer_url(addr, "/api/v1/peer/wizard/free"),
+                        body={"controller_id": CTX.device_id, "reason": reason},
+                        token=CTX.peer_token,
+                        timeout=max(peersmod.HTTP_TIMEOUT, 5.0),
+                    )
+                    peer_results.append({"addr": addr, "via": "wizard_free", **resp})
+            result = CTX.store.demo_reset(reason=reason)
             op_id = result.get("operation_id")
+            try:
+                from cot_r_mgmt import ap_control
+
+                ap_control.resume()
+            except Exception:  # noqa: BLE001
+                pass
+            CTX.onboarding.reset_wizard()
             _json_response(
                 self,
                 200,
@@ -828,7 +870,6 @@ class Handler(BaseHTTPRequestHandler):
                     "peer_releases": peer_results,
                 },
             )
-            CTX.onboarding.reset_latch()
             threading.Thread(target=display_client.show_reset_notice, daemon=True).start()
             return
         _json_response(self, 404, {"ok": False, "error": "not found"})

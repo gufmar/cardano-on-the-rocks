@@ -79,7 +79,7 @@ def show_onboarding(
     priority: int = 55,
     ttl_ms: int = 15000,
 ) -> None:
-    """Join / wizard OLED: steps 1–2 QR layouts, step 3 gear (+ optional ctr by)."""
+    """Join / wizard OLED: steps 1–2 QR layouts, step 3 gear (+ controlled by)."""
     payload = {
         "step": step,
         "digit": digit,

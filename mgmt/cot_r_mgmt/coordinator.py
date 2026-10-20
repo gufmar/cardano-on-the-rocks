@@ -162,7 +162,12 @@ class CoordinatorService:
             }
 
         self._last_role = "peer"
-        self._on_waiting()
+        # If this board is already wizard-adopted, keep step-3 OLED.
+        wiz = self.wizard.snapshot() if self.wizard is not None else {}
+        if wiz.get("role") == "adopted" or int(wiz.get("ui_step") or 0) >= 3:
+            pass
+        else:
+            self._on_waiting()
         return {
             "ok": True,
             "acked": True,
@@ -212,6 +217,11 @@ class CoordinatorService:
                 reason=reason,
             )
         self.store.expire_to_initial(reason=reason)
+        if self.wizard is not None:
+            try:
+                self.wizard.release_from_adoption()
+            except Exception:  # noqa: BLE001
+                log.exception("wizard release_from_adoption failed")
         self._apply_initial()
         return {"ok": True, "acked": True, "state": "Initial"}
 
@@ -260,6 +270,7 @@ class CoordinatorService:
                 "confirmed": wiz.get("confirmed"),
                 "role": wiz.get("role"),
                 "controlled_by": wiz.get("controlled_by"),
+                "controlled_by_id": wiz.get("controlled_by_id"),
             },
         }
 
@@ -321,6 +332,13 @@ class CoordinatorService:
             return
 
         if role == "peer":
+            # Wizard-adopted boards own the OLED (step 3 / controlled by); do not
+            # paint the older "Waiting for setup" claim screen over them.
+            if self.wizard is not None:
+                wiz = self.wizard.snapshot()
+                if wiz.get("role") == "adopted" or int(wiz.get("ui_step") or 0) >= 3:
+                    self._last_role = "peer"
+                    return
             if not self.store.lease_valid():
                 log.info("peer lease expired; returning to Initial")
                 self.store.expire_to_initial(reason="lease_expired")

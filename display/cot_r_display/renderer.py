@@ -290,7 +290,7 @@ class Renderer:
 
         step 1: digit/text LEFT, Wi-Fi QR RIGHT
         step 2: setup-URL QR LEFT, digit/text RIGHT
-        step 3+: big 3 + gear (+ optional "ctr by X") — no QR
+        step 3+: big 3 + gear (+ optional "controlled by / node X") — no QR
         """
         step = int(payload.get("step") or 1)
         digit = str(payload.get("digit") or step)
@@ -370,20 +370,25 @@ class Renderer:
             else:
                 draw.text((2, 0), (digit or "3")[:1], fill="white")
             self._draw_gear(draw, cx=96, cy=28, r=16)
-            ty = 36
-            caps = list(lines) if lines else ["setup"]
-            for line in caps[:2]:
-                if small is not None:
-                    draw.text((2, ty), str(line)[:12], font=small, fill="white")
-                else:
-                    draw.text((2, ty), str(line)[:12], fill="white")
-                ty += 12
             if controlled_by:
-                note = f"ctr by {controlled_by}"
+                # Room under the gear: two short lines, same font as the rest.
+                line1 = "controlled by"
+                line2 = f"node {controlled_by}"
                 if small is not None:
-                    draw.text((2, 52), note[:16], font=small, fill="white")
+                    draw.text((2, 40), line1[:21], font=small, fill="white")
+                    draw.text((2, 52), line2[:21], font=small, fill="white")
                 else:
-                    draw.text((2, 52), note[:16], fill="white")
+                    draw.text((2, 40), line1[:21], fill="white")
+                    draw.text((2, 52), line2[:21], fill="white")
+            else:
+                ty = 40
+                caps = list(lines) if lines else ["setup"]
+                for line in caps[:2]:
+                    if small is not None:
+                        draw.text((2, ty), str(line)[:18], font=small, fill="white")
+                    else:
+                        draw.text((2, ty), str(line)[:18], fill="white")
+                    ty += 12
 
     def draw_bitmap(self, payload: dict) -> None:
         w = int(payload.get("width") or 0)

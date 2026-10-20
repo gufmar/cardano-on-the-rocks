@@ -7,7 +7,7 @@ Phone-driven configuration on the RockPi that served the Wi‑Fi (no mAP captive
 1. OLED step **1**: scan Wi‑Fi QR → join `Cardano-Rocks N`
 2. OLED step **2**: scan setup QR → open `http://<node>:8080/setup`
 3. Web: confirm **“You are about to configure Cardano on the Rocks”**
-4. OLED step **3**: gear icon (configuring). Optional `ctr by X` when adopted.
+4. OLED step **3**: gear icon (configuring). Optional `controlled by node X` when adopted.
 5. Web: check Internet; if needed, SSH to mAP → scan SSIDs → connect (or skip with warning)
 6. Web: discover neighbours still on steps 1–2 → adopt into this wizard
 
@@ -44,10 +44,14 @@ Install each board’s pubkey on the mAP: [map-ssh.md](map-ssh.md).
 
 - Gateway is `172.27.213.1` (not `.312`).
 - Skip Internet is allowed but warned: later steps will likely fail.
-- Adoption uses peer token + marks neighbours OLED step 3 with `ctr by <digit>`.
+- Adoption uses peer token + marks neighbours OLED step 3 with `controlled by node <digit>`.
 - All boards must share the same `/etc/cot-r/peer.token`. A neighbour that answers
   health but fails peer hello (auth) shows in the list as not adoptable; copy the
   token from the controller board and restart `cot-r-mgmt` on that neighbour.
+- Demo reset (API token) on the controller: `POST /api/v1/reset` with
+  `{"scope":"demo"}` releases peers when possible and clears local wizard state.
+  After deploying new code, run the same reset (or clear
+  `/var/lib/cot-r/wizard-state.json`) on every board so all return to step 1.
 - Upstream Wi‑Fi passwords entered during uplink are stored only on the RockPi in
   `/etc/cot-r/uplink-credentials.json` (mode `0600`). The setup UI never receives
   cleartext; it only learns `psk_known` / `ready` so a saved SSID can be connected

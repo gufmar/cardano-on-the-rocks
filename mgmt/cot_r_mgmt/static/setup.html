@@ -462,7 +462,7 @@ input[type=password], input[type=text] {
       method: "POST",
       body: JSON.stringify({ addr }),
     });
-    $("adoptMsg").textContent = `${addr}: freed (individual wizard again)`;
+    $("adoptMsg").textContent = `${addr}: released (individual wizard again)`;
     await loadAdopt({ keepView: true, keepMsg: true });
   }
 
@@ -514,11 +514,11 @@ input[type=password], input[type=text] {
               catch (e) { err(e.message); btn.disabled = false; }
             };
             actions.appendChild(btn);
-          } else if (p.can_free) {
+            } else if (p.can_free) {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "compact secondary";
-            btn.textContent = "Free";
+            btn.textContent = "Release";
             btn.onclick = async () => {
               btn.disabled = true;
               try { await freeOne(String(p.addr)); }
