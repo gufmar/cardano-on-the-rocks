@@ -43,6 +43,9 @@ Install each board’s pubkey on the mAP: [map-ssh.md](map-ssh.md).
 - Gateway is `172.27.213.1` (not `.312`).
 - Skip Internet is allowed but warned: later steps will likely fail.
 - Adoption uses peer token + marks neighbours OLED step 3 with `ctr by <digit>`.
+- All boards must share the same `/etc/cot-r/peer.token`. A neighbour that answers
+  health but fails peer hello (auth) shows in the list as not adoptable; copy the
+  token from the controller board and restart `cot-r-mgmt` on that neighbour.
 - Upstream Wi‑Fi passwords entered during uplink are stored only on the RockPi in
   `/etc/cot-r/uplink-credentials.json` (mode `0600`). The setup UI never receives
   cleartext; it only learns `psk_known` / `ready` so a saved SSID can be connected

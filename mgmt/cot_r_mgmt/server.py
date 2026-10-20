@@ -236,19 +236,40 @@ class Handler(BaseHTTPRequestHandler):
                 if not entry.get("reachable"):
                     continue
                 hello = entry.get("hello") or {}
+                addr = entry.get("addr")
+                # Reachable health but failed peer auth → still show, not adoptable.
+                if not hello.get("ok"):
+                    candidates.append(
+                        {
+                            "addr": addr,
+                            "device_id": None,
+                            "device_label": None,
+                            "board_digit": None,
+                            "ui_step": None,
+                            "adoptable": False,
+                            "error": str(
+                                hello.get("error")
+                                or "peer hello failed (sync /etc/cot-r/peer.token)"
+                            ),
+                        }
+                    )
+                    continue
                 wiz = hello.get("wizard") or {}
                 if wiz.get("confirmed"):
                     continue
                 if int(wiz.get("ui_step") or 1) >= 3:
                     continue
+                label = hello.get("device_label")
+                digit = hello.get("board_digit")
                 candidates.append(
                     {
-                        "addr": entry.get("addr"),
+                        "addr": addr,
                         "device_id": hello.get("device_id"),
-                        "device_label": hello.get("device_label"),
-                        "board_digit": hello.get("board_digit"),
-                        "ui_step": wiz.get("ui_step"),
+                        "device_label": label,
+                        "board_digit": digit,
+                        "ui_step": wiz.get("ui_step", 1),
                         "mgmt_state": hello.get("state"),
+                        "adoptable": True,
                     }
                 )
             _json_response(self, 200, {"ok": True, "candidates": candidates})
@@ -478,7 +499,13 @@ class Handler(BaseHTTPRequestHandler):
                         "controller_digit": digit,
                     },
                     token=CTX.peer_token,
+                    timeout=max(peersmod.HTTP_TIMEOUT, 5.0),
                 )
+                if resp.get("http_status") == 401:
+                    resp.setdefault(
+                        "error",
+                        "unauthorized (peer.token mismatch on that board)",
+                    )
                 results.append({"addr": addr, **resp})
                 if resp.get("ok"):
                     adopted.append(
@@ -513,12 +540,22 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 from cot_r_mgmt import ap_control
 
-                CTX.wizard.become_adopted(
+                snap = CTX.wizard.become_adopted(
                     controller_digit=controller_digit,
                     controller_id=controller_id,
                 )
                 ap_control.standby()
                 CTX.store.set_state("Waiting", note=f"adopted_by={controller_id}")
+                # Push OLED step 3 immediately (do not wait for onboarding poll).
+                display_client.show_onboarding(
+                    step=3,
+                    digit="3",
+                    lines=["setup"],
+                    qr_data="",
+                    qr_side="right",
+                    controlled_by=controller_digit,
+                )
+                CTX.onboarding.reset_latch()
             except Exception as e:  # noqa: BLE001
                 _json_response(self, 500, {"ok": False, "error": str(e)})
                 return
@@ -530,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
                     "device_id": CTX.device_id,
                     "device_label": CTX.device_label,
                     "board_digit": board_digit(),
-                    "wizard": CTX.wizard.snapshot(),
+                    "wizard": snap,
                 },
             )
             return

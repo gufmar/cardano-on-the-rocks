@@ -15,16 +15,44 @@
   --danger: #e05c5c;
   --ok: #3dbe7a;
   --font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --display: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0; min-height: 100vh;
   font-family: var(--font);
   background: radial-gradient(1200px 600px at 10% -10%, #1c2a44, var(--bg));
   color: var(--text);
+  display: flex;
+  flex-direction: column;
 }
-main { max-width: 40rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
-h1 { font-size: 1.45rem; margin: 0 0 .35rem; letter-spacing: -.02em; }
+.shell {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-width: 40rem;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.1rem 1rem 0;
+}
+.brand-hero {
+  font-family: var(--display);
+  font-size: clamp(1.85rem, 6vw, 2.45rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -.03em;
+  margin: .35rem 0 1rem;
+}
+.brand-bar {
+  font-family: var(--display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  margin: 0 0 .85rem;
+  color: var(--text);
+}
+.brand-bar.hidden, .brand-hero.hidden { display: none !important; }
 h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
 p, li { color: var(--muted); line-height: 1.45; }
 .card {
@@ -32,7 +60,7 @@ p, li { color: var(--muted); line-height: 1.45; }
   border: 1px solid #243352;
   border-radius: 12px;
   padding: 1.1rem 1rem;
-  margin: 1rem 0;
+  margin: 0 0 1rem;
 }
 .hidden { display: none !important; }
 button, .btn {
@@ -51,6 +79,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   background: #121b2d; cursor: pointer;
 }
 .ssid:hover, .ssid.selected { border-color: var(--accent); }
+.ssid.disabled-peer {
+  opacity: .72; cursor: default; border-style: dashed;
+}
 .badge {
   font-size: .75rem; padding: .15rem .4rem; border-radius: 999px;
   background: #243352; color: var(--text);
@@ -58,6 +89,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .badge.open { background: #244436; color: #b6f0cd; }
 .badge.psk { background: #3a2f1d; color: #ffd9a0; }
 .badge.saved { background: #1d3a3a; color: #9ee7e0; }
+.badge.err { background: #3a1d1d; color: #ffb4b4; }
 .badge-row { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
 .linkish {
   appearance: none; border: 0; background: none; color: var(--accent);
@@ -72,22 +104,35 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   border: 1px solid #1f5a3c; background: #13261c; color: #b6f0cd;
   border-radius: 10px; padding: .8rem .9rem; margin: .75rem 0;
 }
-.err { color: var(--danger); }
+.err { color: var(--danger); margin: .5rem 0 0; }
 input[type=password], input[type=text] {
   width: 100%; padding: .65rem .7rem; border-radius: 10px;
   border: 1px solid #2b3c5c; background: #0f1726; color: var(--text);
   font: inherit;
 }
 .meta { font-size: .85rem; color: var(--muted); }
+.peer-row {
+  display: flex; gap: .65rem; align-items: flex-start;
+  width: 100%;
+}
+.peer-row input { margin-top: .2rem; }
+.site-footer {
+  margin-top: auto;
+  padding: .85rem 1rem 1.25rem;
+  border-top: 1px solid #243352;
+  color: var(--muted);
+  font-size: .85rem;
+}
 </style>
 </head>
 <body>
-<main>
-  <p class="meta" id="deviceMeta">Loading…</p>
+<div class="shell">
+  <div id="brandHero" class="brand-hero">Cardano on the Rocks</div>
+  <div id="brandBar" class="brand-bar hidden">Cardano on the Rocks</div>
 
   <section id="view-welcome" class="card">
-    <h1>You are about to configure<br/>Cardano on the Rocks</h1>
-    <p>This phone will drive setup for this node (and optionally its neighbours). Confirm only if you meant to open this page.</p>
+    <h2>You are about to configure this node</h2>
+    <p>This phone will drive setup for this node and optionally its neighbours. Confirm only if you meant to open this page.</p>
     <div class="row">
       <button id="btnConfirm" type="button">Yes, start setup</button>
     </div>
@@ -122,13 +167,13 @@ input[type=password], input[type=text] {
       </div>
     </div>
     <div class="row">
-      <button id="btnToAdopt" type="button" class="secondary hidden">Continue</button>
+      <button id="btnToAdopt" type="button" class="hidden">Continue</button>
     </div>
   </section>
 
   <section id="view-adopt" class="card hidden">
     <h2>Neighbour nodes</h2>
-    <p>Other RockPis still waiting on step 1/2 (nobody confirmed setup there) can join this wizard.</p>
+    <p>Other RockPis still on step 1 or 2 can join this wizard.</p>
     <div id="peerList"></div>
     <div class="row">
       <button id="btnAdopt" type="button">Adopt selected</button>
@@ -147,7 +192,8 @@ input[type=password], input[type=text] {
   </section>
 
   <p class="err" id="err"></p>
-</main>
+</div>
+<footer class="site-footer" id="deviceMeta">Loading…</footer>
 <script>
 (function () {
   const state = {
@@ -160,7 +206,13 @@ input[type=password], input[type=text] {
   };
 
   const $ = (id) => document.getElementById(id);
-  const show = (id) => { document.querySelectorAll("main > section").forEach(s => s.classList.add("hidden")); $(id).classList.remove("hidden"); };
+  const show = (id) => {
+    document.querySelectorAll(".shell > section").forEach(s => s.classList.add("hidden"));
+    $(id).classList.remove("hidden");
+    const welcome = id === "view-welcome";
+    $("brandHero").classList.toggle("hidden", !welcome);
+    $("brandBar").classList.toggle("hidden", welcome);
+  };
   const err = (msg) => { $("err").textContent = msg || ""; };
 
   async function api(path, opts = {}) {
@@ -179,6 +231,17 @@ input[type=password], input[type=text] {
     $("deviceMeta").textContent = `${d.device_label || "node"} · ${d.mgmt_ipv4 || "?"}`;
   }
 
+  function setInetOkUi(ok) {
+    $("inetOk").classList.toggle("hidden", !ok);
+    $("inetBad").classList.toggle("hidden", !!ok);
+    $("btnToAdopt").classList.toggle("hidden", !ok);
+    $("btnSkip").classList.toggle("hidden", !!ok);
+    if (ok) {
+      $("btnToAdopt").classList.remove("secondary");
+      $("skipWarn").classList.add("hidden");
+    }
+  }
+
   async function refreshStatus() {
     const d = await api("/api/v1/wizard/status");
     paintDevice(d);
@@ -195,10 +258,7 @@ input[type=password], input[type=text] {
     $("scanArea").classList.remove("hidden");
     const probe = await api("/api/v1/wizard/internet");
     $("inetStatus").textContent = probe.ok ? "Internet probe: OK" : "Internet probe: not OK";
-    $("inetOk").classList.toggle("hidden", !probe.ok);
-    $("inetBad").classList.toggle("hidden", !!probe.ok);
-    $("btnToAdopt").classList.toggle("hidden", !probe.ok);
-    if (probe.ok) $("btnToAdopt").classList.remove("hidden");
+    setInetOkUi(!!probe.ok);
   }
 
   $("btnConfirm").onclick = async () => {
@@ -331,16 +391,15 @@ input[type=password], input[type=text] {
         await sleep(2500);
         const probe = await api("/api/v1/wizard/internet");
         if (probe.ok) {
-          $("inetOk").classList.remove("hidden");
-          $("inetBad").classList.add("hidden");
-          $("btnToAdopt").classList.remove("hidden");
           $("inetStatus").textContent = "Internet probe: OK";
+          setInetOkUi(true);
           state.selectedPskKnown = needPsk ? true : state.selectedPskKnown;
           state.changingPsk = false;
           paintPskUi();
           return;
         }
       }
+      setInetOkUi(false);
       $("inetBad").classList.remove("hidden");
       err("Still no Internet after connect. Check PSK / SSID, then retry or pick another network.");
     } catch (e) { err(e.message); }
@@ -361,24 +420,56 @@ input[type=password], input[type=text] {
   $("btnBackUplink").onclick = () => goUplink();
   $("btnBackAdopt").onclick = () => loadAdopt();
 
+  function peerTitle(p) {
+    const label = String(p.device_label || "").trim();
+    if (label && label !== p.addr) return label;
+    if (p.board_digit) return `rockpi-${p.board_digit}`;
+    return String(p.addr || "neighbour");
+  }
+
   async function loadAdopt() {
     show("view-adopt");
     err("");
+    $("adoptMsg").textContent = "";
     $("peerList").innerHTML = "<p class='meta'>Discovering neighbours…</p>";
     try {
       const d = await api("/api/v1/wizard/peers");
       const peers = d.candidates || [];
       if (!peers.length) {
-        $("peerList").innerHTML = "<p class='meta'>No adoptable neighbours (or they already confirmed setup).</p>";
+        $("peerList").innerHTML = "<p class='meta'>No adoptable neighbours right now.</p>";
       } else {
         $("peerList").innerHTML = "";
         peers.forEach((p) => {
-          const id = `peer_${p.addr.replace(/\./g, "_")}`;
+          const adoptable = p.adoptable !== false && !p.error;
           const row = document.createElement("label");
-          row.className = "ssid";
-          row.innerHTML = `<div><input type="checkbox" id="${id}" data-addr="${escapeHtml(p.addr)}" data-id="${escapeHtml(p.device_id || "")}"/>
-            <strong>${escapeHtml(p.device_label || p.addr)}</strong>
-            <div class="meta">${escapeHtml(p.addr)} · step ${p.ui_step ?? "?"}</div></div>`;
+          row.className = "ssid" + (adoptable ? "" : " disabled-peer");
+          const wrap = document.createElement("div");
+          wrap.className = "peer-row";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.dataset.addr = String(p.addr || "");
+          cb.disabled = !adoptable;
+          if (adoptable) cb.checked = true;
+          const text = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = peerTitle(p);
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const step = (p.ui_step == null || p.ui_step === "") ? "?" : String(p.ui_step);
+          meta.textContent = p.error
+            ? `${p.addr} · ${p.error}`
+            : `${p.addr} · step ${step}`;
+          text.appendChild(title);
+          text.appendChild(meta);
+          wrap.appendChild(cb);
+          wrap.appendChild(text);
+          row.appendChild(wrap);
+          if (p.error) {
+            const badge = document.createElement("span");
+            badge.className = "badge err";
+            badge.textContent = "auth?";
+            row.appendChild(badge);
+          }
           $("peerList").appendChild(row);
         });
       }
@@ -390,18 +481,29 @@ input[type=password], input[type=text] {
 
   $("btnAdopt").onclick = async () => {
     err("");
-    const addrs = [...document.querySelectorAll("#peerList input[type=checkbox]:checked")].map(x => x.dataset.addr);
+    const addrs = [...document.querySelectorAll("#peerList input[type=checkbox]:checked")]
+      .map(x => x.dataset.addr).filter(Boolean);
+    if (!addrs.length) {
+      err("Select at least one neighbour, or continue without adopting.");
+      return;
+    }
+    $("btnAdopt").disabled = true;
     try {
       const d = await api("/api/v1/wizard/adopt", { method: "POST", body: JSON.stringify({ addrs }) });
-      $("adoptMsg").textContent = `Adopted ${((d.results || []).filter(r => r.ok).length)} neighbour(s).`;
-      show("view-done");
+      const results = d.results || [];
+      const okN = results.filter(r => r.ok).length;
+      const lines = results.map((r) => {
+        if (r.ok) return `${r.addr}: adopted`;
+        return `${r.addr}: ${r.error || "failed"}`;
+      });
+      $("adoptMsg").textContent = `Adopted ${okN}/${results.length}. ${lines.join(" · ")}`;
+      if (okN > 0) show("view-done");
+      else err("No neighbour accepted adopt. Sync /etc/cot-r/peer.token across boards, then retry.");
     } catch (e) { err(e.message); }
+    finally { $("btnAdopt").disabled = false; }
   };
   $("btnAdoptSkip").onclick = () => show("view-done");
 
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-  }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   (async function boot() {
