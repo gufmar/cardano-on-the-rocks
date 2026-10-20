@@ -14,8 +14,9 @@
   --warn: #e6a23c;
   --danger: #e05c5c;
   --ok: #3dbe7a;
+  /* RockPi case / LED-ish green for brand marks */
+  --brand: #39ff14;
   --font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
-  --display: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -37,20 +38,21 @@ body {
   padding: 1.1rem 1rem 0;
 }
 .brand-hero {
-  font-family: var(--display);
+  font-family: inherit;
   font-size: clamp(1.85rem, 6vw, 2.45rem);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.15;
-  letter-spacing: -.03em;
+  letter-spacing: -.02em;
   margin: .35rem 0 1rem;
+  color: var(--brand);
 }
 .brand-bar {
-  font-family: var(--display);
+  font-family: inherit;
   font-size: 1.05rem;
-  font-weight: 600;
-  letter-spacing: -.02em;
+  font-weight: 700;
+  letter-spacing: -.01em;
   margin: 0 0 .85rem;
-  color: var(--text);
+  color: var(--brand);
 }
 .brand-bar.hidden, .brand-hero.hidden { display: none !important; }
 h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
@@ -90,7 +92,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .badge.psk { background: #3a2f1d; color: #ffd9a0; }
 .badge.saved { background: #1d3a3a; color: #9ee7e0; }
 .badge.err { background: #3a1d1d; color: #ffb4b4; }
-.badge-row { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
+.badge.available { background: #243352; color: #c5d4f5; }
+.badge.adopted { background: #1d3a3a; color: #9ee7e0; }
+.badge.busy { background: #3a2f1d; color: #ffd9a0; }
+.badge-row { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; align-items: center; }
+button.compact { padding: .4rem .7rem; font-size: .85rem; }
 .linkish {
   appearance: none; border: 0; background: none; color: var(--accent);
   font: inherit; font-size: .85rem; padding: 0; cursor: pointer; text-decoration: underline;
@@ -173,11 +179,10 @@ input[type=password], input[type=text] {
 
   <section id="view-adopt" class="card hidden">
     <h2>Neighbour nodes</h2>
-    <p>Other RockPis still on step 1 or 2 can join this wizard.</p>
+    <p>Other devices can be configured individually via their wizard or become adopted and configured by this wizard.</p>
     <div id="peerList"></div>
     <div class="row">
-      <button id="btnAdopt" type="button">Adopt selected</button>
-      <button id="btnAdoptSkip" type="button" class="secondary">Continue without adopting</button>
+      <button id="btnAdoptContinue" type="button">Continue</button>
     </div>
     <p class="meta" id="adoptMsg"></p>
   </section>
@@ -427,30 +432,59 @@ input[type=password], input[type=text] {
     return String(p.addr || "neighbour");
   }
 
-  async function loadAdopt() {
-    show("view-adopt");
+  function statusLabel(status) {
+    if (status === "adopted") return "adopted";
+    if (status === "available") return "available";
+    if (status === "busy") return "busy";
+    if (status === "error") return "error";
+    return status || "unknown";
+  }
+
+  async function adoptOne(addr) {
     err("");
-    $("adoptMsg").textContent = "";
+    $("adoptMsg").textContent = `Adopting ${addr}…`;
+    const d = await api("/api/v1/wizard/adopt", {
+      method: "POST",
+      body: JSON.stringify({ addrs: [addr] }),
+    });
+    const r = (d.results || [])[0] || {};
+    if (!r.ok) {
+      throw new Error(r.error || `adopt failed for ${addr}`);
+    }
+    $("adoptMsg").textContent = `${addr}: adopted`;
+    await loadAdopt({ keepView: true, keepMsg: true });
+  }
+
+  async function freeOne(addr) {
+    err("");
+    $("adoptMsg").textContent = `Freeing ${addr}…`;
+    await api("/api/v1/wizard/free", {
+      method: "POST",
+      body: JSON.stringify({ addr }),
+    });
+    $("adoptMsg").textContent = `${addr}: freed (individual wizard again)`;
+    await loadAdopt({ keepView: true, keepMsg: true });
+  }
+
+  async function loadAdopt(opts = {}) {
+    if (!opts.keepView) show("view-adopt");
+    err("");
+    if (!opts.keepMsg) $("adoptMsg").textContent = "";
     $("peerList").innerHTML = "<p class='meta'>Discovering neighbours…</p>";
     try {
       const d = await api("/api/v1/wizard/peers");
       const peers = d.candidates || [];
       if (!peers.length) {
-        $("peerList").innerHTML = "<p class='meta'>No adoptable neighbours right now.</p>";
+        $("peerList").innerHTML = "<p class='meta'>No other RockPis reachable right now.</p>";
       } else {
         $("peerList").innerHTML = "";
         peers.forEach((p) => {
-          const adoptable = p.adoptable !== false && !p.error;
-          const row = document.createElement("label");
-          row.className = "ssid" + (adoptable ? "" : " disabled-peer");
-          const wrap = document.createElement("div");
-          wrap.className = "peer-row";
-          const cb = document.createElement("input");
-          cb.type = "checkbox";
-          cb.dataset.addr = String(p.addr || "");
-          cb.disabled = !adoptable;
-          if (adoptable) cb.checked = true;
-          const text = document.createElement("div");
+          const status = String(p.status || (p.error ? "error" : "available"));
+          const row = document.createElement("div");
+          row.className = "ssid";
+          row.style.cursor = "default";
+
+          const left = document.createElement("div");
           const title = document.createElement("strong");
           title.textContent = peerTitle(p);
           const meta = document.createElement("div");
@@ -459,17 +493,42 @@ input[type=password], input[type=text] {
           meta.textContent = p.error
             ? `${p.addr} · ${p.error}`
             : `${p.addr} · step ${step}`;
-          text.appendChild(title);
-          text.appendChild(meta);
-          wrap.appendChild(cb);
-          wrap.appendChild(text);
-          row.appendChild(wrap);
-          if (p.error) {
-            const badge = document.createElement("span");
-            badge.className = "badge err";
-            badge.textContent = "auth?";
-            row.appendChild(badge);
+          left.appendChild(title);
+          left.appendChild(meta);
+
+          const actions = document.createElement("div");
+          actions.className = "badge-row";
+          const badge = document.createElement("span");
+          badge.className = `badge ${status === "error" ? "err" : status}`;
+          badge.textContent = statusLabel(status);
+          actions.appendChild(badge);
+
+          if (p.can_adopt) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "compact";
+            btn.textContent = "Adopt";
+            btn.onclick = async () => {
+              btn.disabled = true;
+              try { await adoptOne(String(p.addr)); }
+              catch (e) { err(e.message); btn.disabled = false; }
+            };
+            actions.appendChild(btn);
+          } else if (p.can_free) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "compact secondary";
+            btn.textContent = "Free";
+            btn.onclick = async () => {
+              btn.disabled = true;
+              try { await freeOne(String(p.addr)); }
+              catch (e) { err(e.message); btn.disabled = false; }
+            };
+            actions.appendChild(btn);
           }
+
+          row.appendChild(left);
+          row.appendChild(actions);
           $("peerList").appendChild(row);
         });
       }
@@ -479,30 +538,7 @@ input[type=password], input[type=text] {
     }
   }
 
-  $("btnAdopt").onclick = async () => {
-    err("");
-    const addrs = [...document.querySelectorAll("#peerList input[type=checkbox]:checked")]
-      .map(x => x.dataset.addr).filter(Boolean);
-    if (!addrs.length) {
-      err("Select at least one neighbour, or continue without adopting.");
-      return;
-    }
-    $("btnAdopt").disabled = true;
-    try {
-      const d = await api("/api/v1/wizard/adopt", { method: "POST", body: JSON.stringify({ addrs }) });
-      const results = d.results || [];
-      const okN = results.filter(r => r.ok).length;
-      const lines = results.map((r) => {
-        if (r.ok) return `${r.addr}: adopted`;
-        return `${r.addr}: ${r.error || "failed"}`;
-      });
-      $("adoptMsg").textContent = `Adopted ${okN}/${results.length}. ${lines.join(" · ")}`;
-      if (okN > 0) show("view-done");
-      else err("No neighbour accepted adopt. Sync /etc/cot-r/peer.token across boards, then retry.");
-    } catch (e) { err(e.message); }
-    finally { $("btnAdopt").disabled = false; }
-  };
-  $("btnAdoptSkip").onclick = () => show("view-done");
+  $("btnAdoptContinue").onclick = () => show("view-done");
 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 

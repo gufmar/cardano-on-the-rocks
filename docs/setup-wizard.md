@@ -34,9 +34,11 @@ Install each board’s pubkey on the mAP: [map-ssh.md](map-ssh.md).
 | POST | `/api/v1/wizard/uplink/scan` | `X-Setup-Session` |
 | POST | `/api/v1/wizard/uplink/connect` | session |
 | POST | `/api/v1/wizard/uplink/skip` | session |
-| GET | `/api/v1/wizard/peers` | session |
-| POST | `/api/v1/wizard/adopt` | session |
+| GET | `/api/v1/wizard/peers` | session (available / adopted / busy) |
+| POST | `/api/v1/wizard/adopt` | session `{addrs:[…]}` |
+| POST | `/api/v1/wizard/free` | session `{addr}` |
 | POST | `/api/v1/peer/wizard/adopt` | peer Bearer |
+| POST | `/api/v1/peer/wizard/free` | peer Bearer |
 
 ## Notes
 

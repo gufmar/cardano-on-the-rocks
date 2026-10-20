@@ -150,12 +150,33 @@ class WizardStore:
             return self._state.to_dict()
 
     def become_controller(self, *, adopted: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Mark this board controller; merge newly adopted peers by addr."""
         with self._lock:
             self._state.role = "controller"
-            self._state.adopted_peers = adopted
+            by_addr: Dict[str, Dict[str, Any]] = {}
+            for p in self._state.adopted_peers:
+                a = str(p.get("addr") or "")
+                if a:
+                    by_addr[a] = p
+            for p in adopted:
+                a = str(p.get("addr") or "")
+                if a:
+                    by_addr[a] = p
+            self._state.adopted_peers = list(by_addr.values())
             self._state.controlled_by = None
             self._state.controlled_by_id = None
             self._state.ui_step = STEP_CONFIGURING
+            self._save()
+            return self._state.to_dict()
+
+    def remove_adopted_peer(self, addr: str) -> Dict[str, Any]:
+        with self._lock:
+            addr = str(addr or "")
+            self._state.adopted_peers = [
+                p for p in self._state.adopted_peers if str(p.get("addr") or "") != addr
+            ]
+            if not self._state.adopted_peers and self._state.role == "controller":
+                self._state.role = "solo"
             self._save()
             return self._state.to_dict()
 
@@ -168,6 +189,19 @@ class WizardStore:
             self._state.ui_step = STEP_CONFIGURING
             if not self._state.session_id:
                 self._state.session_id = secrets.token_urlsafe(16)
+            self._save()
+            return self._state.to_dict()
+
+    def release_from_adoption(self) -> Dict[str, Any]:
+        """Return to individual onboarding (step 1); clear controller link."""
+        with self._lock:
+            self._state.role = "solo"
+            self._state.controlled_by = None
+            self._state.controlled_by_id = None
+            self._state.confirmed = False
+            self._state.session_id = None
+            self._state.ui_step = STEP_WIFI_QR
+            self._state.adopted_peers = []
             self._save()
             return self._state.to_dict()
 

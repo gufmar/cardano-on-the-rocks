@@ -231,13 +231,23 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_wizard_session():
                 return
             found = CTX.coord.discover()
+            local_wiz = CTX.wizard.snapshot()
+            my_id = CTX.device_id
+            local_adopted = {
+                str(p.get("addr") or "")
+                for p in (local_wiz.get("adopted_peers") or [])
+                if p.get("addr")
+            }
+            seen_addrs: set = set()
             candidates = []
             for entry in found:
                 if not entry.get("reachable"):
                     continue
                 hello = entry.get("hello") or {}
-                addr = entry.get("addr")
-                # Reachable health but failed peer auth → still show, not adoptable.
+                addr = str(entry.get("addr") or "")
+                if not addr:
+                    continue
+                seen_addrs.add(addr)
                 if not hello.get("ok"):
                     candidates.append(
                         {
@@ -246,7 +256,9 @@ class Handler(BaseHTTPRequestHandler):
                             "device_label": None,
                             "board_digit": None,
                             "ui_step": None,
-                            "adoptable": False,
+                            "status": "error",
+                            "can_adopt": False,
+                            "can_free": False,
                             "error": str(
                                 hello.get("error")
                                 or "peer hello failed (sync /etc/cot-r/peer.token)"
@@ -255,23 +267,55 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     continue
                 wiz = hello.get("wizard") or {}
-                if wiz.get("confirmed"):
-                    continue
-                if int(wiz.get("ui_step") or 1) >= 3:
-                    continue
-                label = hello.get("device_label")
-                digit = hello.get("board_digit")
+                role = str(wiz.get("role") or "solo")
+                controlled_by_id = str(wiz.get("controlled_by_id") or "")
+                ui_step = int(wiz.get("ui_step") or 1)
+                confirmed = bool(wiz.get("confirmed"))
+                we_control = bool(
+                    (role == "adopted" and controlled_by_id == my_id)
+                    or addr in local_adopted
+                )
+                if we_control:
+                    status = "adopted"
+                elif role == "adopted":
+                    status = "busy"
+                elif confirmed or ui_step >= 3:
+                    status = "busy"
+                else:
+                    status = "available"
                 candidates.append(
                     {
                         "addr": addr,
                         "device_id": hello.get("device_id"),
-                        "device_label": label,
-                        "board_digit": digit,
-                        "ui_step": wiz.get("ui_step", 1),
+                        "device_label": hello.get("device_label"),
+                        "board_digit": hello.get("board_digit"),
+                        "ui_step": ui_step,
                         "mgmt_state": hello.get("state"),
-                        "adoptable": True,
+                        "wizard_role": role,
+                        "status": status,
+                        "can_adopt": status == "available",
+                        "can_free": status == "adopted",
                     }
                 )
+            # Keep previously adopted peers visible even if briefly unreachable.
+            for p in local_wiz.get("adopted_peers") or []:
+                addr = str(p.get("addr") or "")
+                if not addr or addr in seen_addrs:
+                    continue
+                candidates.append(
+                    {
+                        "addr": addr,
+                        "device_id": p.get("device_id"),
+                        "device_label": p.get("device_label"),
+                        "board_digit": None,
+                        "ui_step": 3,
+                        "status": "adopted",
+                        "can_adopt": False,
+                        "can_free": True,
+                        "error": "unreachable (still listed as adopted)",
+                    }
+                )
+            candidates.sort(key=lambda c: str(c.get("addr") or ""))
             _json_response(self, 200, {"ok": True, "candidates": candidates})
             return
         if path == "/api/v1/health":
@@ -522,6 +566,56 @@ class Handler(BaseHTTPRequestHandler):
                 {"ok": True, "results": results, "wizard": snap},
             )
             return
+        if path == "/api/v1/wizard/free":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            addr = str(body.get("addr") or "").strip()
+            if not addr:
+                _json_response(self, 400, {"ok": False, "error": "addr required"})
+                return
+            if not CTX.peer_token:
+                _json_response(self, 503, {"ok": False, "error": "peer.token missing"})
+                return
+            resp = peersmod.http_json(
+                "POST",
+                peersmod.peer_url(addr, "/api/v1/peer/wizard/free"),
+                body={
+                    "controller_id": CTX.device_id,
+                    "reason": "wizard_free",
+                },
+                token=CTX.peer_token,
+                timeout=max(peersmod.HTTP_TIMEOUT, 5.0),
+            )
+            if resp.get("http_status") == 401:
+                resp.setdefault(
+                    "error",
+                    "unauthorized (peer.token mismatch on that board)",
+                )
+            # Drop from local adopted list on success or unreachable (stale entry).
+            freed_local = False
+            if resp.get("ok") or resp.get("unreachable"):
+                snap = CTX.wizard.remove_adopted_peer(addr)
+                freed_local = True
+            else:
+                snap = CTX.wizard.snapshot()
+            ok = bool(resp.get("ok") or (resp.get("unreachable") and freed_local))
+            _json_response(
+                self,
+                200 if ok else 502,
+                {
+                    "ok": ok,
+                    "addr": addr,
+                    "peer": resp,
+                    "wizard": snap,
+                    "error": None if ok else (resp.get("error") or "free failed"),
+                },
+            )
+            return
         if path == "/api/v1/peer/wizard/adopt":
             if not self._require_peer_auth():
                 return
@@ -555,6 +649,55 @@ class Handler(BaseHTTPRequestHandler):
                     qr_side="right",
                     controlled_by=controller_digit,
                 )
+                CTX.onboarding.reset_latch()
+            except Exception as e:  # noqa: BLE001
+                _json_response(self, 500, {"ok": False, "error": str(e)})
+                return
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "device_id": CTX.device_id,
+                    "device_label": CTX.device_label,
+                    "board_digit": board_digit(),
+                    "wizard": snap,
+                },
+            )
+            return
+        if path == "/api/v1/peer/wizard/free":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            controller_id = str(body.get("controller_id") or "")
+            wiz = CTX.wizard.snapshot()
+            # Only the adopting controller (or missing link) may free this board.
+            if (
+                wiz.get("role") == "adopted"
+                and wiz.get("controlled_by_id")
+                and controller_id
+                and controller_id != wiz.get("controlled_by_id")
+            ):
+                _json_response(
+                    self,
+                    409,
+                    {
+                        "ok": False,
+                        "error": "adopted by a different controller",
+                        "controlled_by_id": wiz.get("controlled_by_id"),
+                    },
+                )
+                return
+            try:
+                from cot_r_mgmt import ap_control
+
+                snap = CTX.wizard.release_from_adoption()
+                CTX.store.expire_to_initial(reason=str(body.get("reason") or "wizard_free"))
+                ap_control.resume()
                 CTX.onboarding.reset_latch()
             except Exception as e:  # noqa: BLE001
                 _json_response(self, 500, {"ok": False, "error": str(e)})
