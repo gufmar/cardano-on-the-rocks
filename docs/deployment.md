@@ -79,6 +79,8 @@ fields are ignored and invalid documents are replaced carefully with Recovery no
 | `/etc/cot-r/api.token` | Bearer token for management API |
 | `/etc/cot-r/device.id` | Stable device UUID |
 | `/etc/cot-r/device.env` | Non-secret device labels / reserved IP hints |
-| future AP / RouterOS secrets | Separate files under `/etc/cot-r/` |
+| `/etc/cot-r/ap.psk` | RockPi AP WPA passphrase |
+| `/etc/cot-r/uplink-credentials.json` | Known upstream SSIDs / PSKs for setup wizard |
+| `/etc/cot-r/ssh/id_ed25519` | Per-node key for mAP SSH |
 
 Never commit these files.

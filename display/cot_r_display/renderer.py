@@ -246,19 +246,38 @@ class Renderer:
             elif got < 2:
                 log.warning("full-panel QR scale=%s modules=%s (hard to scan)", got, len(matrix))
 
+    def _draw_gear(self, draw: Any, cx: int, cy: int, r: int = 18) -> None:
+        """Simple gear icon (spokes + hub) for step-3 configuring."""
+        import math
+
+        teeth = 8
+        for i in range(teeth):
+            ang = (2 * math.pi * i) / teeth
+            x1 = cx + int((r - 4) * math.cos(ang))
+            y1 = cy + int((r - 4) * math.sin(ang))
+            x2 = cx + int((r + 5) * math.cos(ang))
+            y2 = cy + int((r + 5) * math.sin(ang))
+            draw.line((x1, y1, x2, y2), fill="white", width=3)
+        draw.ellipse((cx - r + 2, cy - r + 2, cx + r - 2, cy + r - 2), outline="white", width=2)
+        draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline="white", fill="black", width=1)
+
     def draw_onboarding(self, payload: dict) -> None:
-        """Split layout: step digit + caption on one side, full-height QR on the other.
+        """Onboarding layouts.
 
         step 1: digit/text LEFT, Wi-Fi QR RIGHT
         step 2: setup-URL QR LEFT, digit/text RIGHT
-
-        QR always gets a 64x64 column (full panel height). A narrower text column
-        used to drop WIFI: payloads to 1px modules (unscannable).
+        step 3+: big 3 + gear (+ optional "ctr by X") — no QR
         """
         step = int(payload.get("step") or 1)
         digit = str(payload.get("digit") or step)
         lines = [str(x) for x in (payload.get("lines") or [])][:3]
         qr_data = str(payload.get("qr_data") or "")
+        controlled_by = payload.get("controlled_by")
+
+        if step >= 3:
+            self._draw_configuring(digit=digit, lines=lines, controlled_by=controlled_by)
+            return
+
         # Default sides match the product story.
         qr_side = str(payload.get("qr_side") or ("right" if step == 1 else "left")).lower()
         if qr_side not in ("left", "right"):
@@ -311,6 +330,37 @@ class Renderer:
                 draw.rectangle((qr_ox, 50, qr_ox + qr_w - 1, 63), outline="black", fill="black")
                 draw.text((qr_ox + 2, 52), "PSK too long", fill="white")
 
+    def _draw_configuring(
+        self,
+        *,
+        digit: str,
+        lines: Sequence[str],
+        controlled_by: Any = None,
+    ) -> None:
+        big = self._big_font(32)
+        small = self._small_font(11)
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            if big is not None:
+                draw.text((2, -4), (digit or "3")[:1], font=big, fill="white")
+            else:
+                draw.text((2, 0), (digit or "3")[:1], fill="white")
+            self._draw_gear(draw, cx=96, cy=28, r=16)
+            ty = 36
+            caps = list(lines) if lines else ["setup"]
+            for line in caps[:2]:
+                if small is not None:
+                    draw.text((2, ty), str(line)[:12], font=small, fill="white")
+                else:
+                    draw.text((2, ty), str(line)[:12], fill="white")
+                ty += 12
+            if controlled_by:
+                note = f"ctr by {controlled_by}"
+                if small is not None:
+                    draw.text((2, 52), note[:16], font=small, fill="white")
+                else:
+                    draw.text((2, 52), note[:16], fill="white")
+
     def draw_bitmap(self, payload: dict) -> None:
         w = int(payload.get("width") or 0)
         h = int(payload.get("height") or 0)
@@ -350,4 +400,10 @@ class _NullDraw:
         return None
 
     def point(self, *args, **kwargs):
+        return None
+
+    def line(self, *args, **kwargs):
+        return None
+
+    def ellipse(self, *args, **kwargs):
         return None

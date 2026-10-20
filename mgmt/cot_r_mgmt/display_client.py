@@ -73,23 +73,27 @@ def show_onboarding(
     step: int,
     digit: str,
     lines: List[str],
-    qr_data: str,
+    qr_data: str = "",
     qr_side: str = "right",
+    controlled_by: Optional[str] = None,
     priority: int = 55,
     ttl_ms: int = 15000,
 ) -> None:
-    """Two-step join flow: Wi-Fi QR (1) then local setup URL QR (2)."""
+    """Join / wizard OLED: steps 1–2 QR layouts, step 3 gear (+ optional ctr by)."""
+    payload = {
+        "step": step,
+        "digit": digit,
+        "lines": lines[:3],
+        "qr_data": qr_data,
+        "qr_side": qr_side,
+    }
+    if controlled_by:
+        payload["controlled_by"] = controlled_by
     send(
         {
             "cmd": "onboarding",
             "priority": priority,
             "ttl_ms": ttl_ms,
-            "payload": {
-                "step": step,
-                "digit": digit,
-                "lines": lines[:3],
-                "qr_data": qr_data,
-                "qr_side": qr_side,
-            },
+            "payload": payload,
         }
     )

@@ -45,9 +45,15 @@ from cot_r_mgmt import API_VERSION, SOURCE_URL, __version__  # noqa: E402
 from cot_r_mgmt import auth as authmod  # noqa: E402
 from cot_r_mgmt import display_client  # noqa: E402
 from cot_r_mgmt import identity  # noqa: E402
+from cot_r_mgmt import internet as internetmod  # noqa: E402
+from cot_r_mgmt import routeros as ros  # noqa: E402
 from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
-from cot_r_mgmt.onboarding import OnboardingDisplay  # noqa: E402
+from cot_r_mgmt.onboarding import OnboardingDisplay, board_digit  # noqa: E402
+from cot_r_mgmt import peers as peersmod  # noqa: E402
 from cot_r_mgmt.state import StateStore  # noqa: E402
+from cot_r_mgmt.wizard import WizardStore  # noqa: E402
+
+SETUP_HTML = Path(__file__).resolve().parent / "static" / "setup.html"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,14 +83,16 @@ class AppContext:
         self.token = authmod.load_token() or authmod.ensure_token()
         self.token = authmod.load_token()
         self.peer_token = authmod.load_peer_token()
+        self.wizard = WizardStore()
         self.coord = CoordinatorService(
             store=self.store,
             device_id=self.device_id,
             device_label=self.device_label,
             boot_id=self.boot_id,
             peer_token=self.peer_token,
+            wizard=self.wizard,
         )
-        self.onboarding = OnboardingDisplay(store=self.store)
+        self.onboarding = OnboardingDisplay(store=self.store, wizard=self.wizard)
         log.info(
             "boot device_id=%s label=%s boot_id=%s state=%s peer_token=%s",
             self.device_id,
@@ -118,31 +126,14 @@ def _html_response(handler: BaseHTTPRequestHandler, code: int, html: str) -> Non
     handler.wfile.write(raw)
 
 
-def _setup_page_html(*, device_label: str, device_id: str) -> str:
-    # Minimal phone-friendly stub until the full local setup UI lands.
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Cardano on the Rocks – setup</title>
-<style>
-body{{font-family:system-ui,sans-serif;margin:1.5rem;line-height:1.4;background:#0b1220;color:#e8eefc}}
-h1{{font-size:1.4rem;margin:0 0 .5rem}}
-p{{margin:.4rem 0;color:#b7c3de}}
-code{{background:#1a2438;padding:.1rem .35rem;border-radius:4px}}
-</style>
-</head>
-<body>
-<h1>Setup this node</h1>
-<p>You are on <strong>{device_label}</strong>.</p>
-<p>Device id: <code>{device_id}</code></p>
-<p>Full local setup UI comes next. For now use the management API on
-<code>/api/v1/</code> (Bearer token in <code>/etc/cot-r/api.token</code> on the board).</p>
-<p>Source: <a href="{SOURCE_URL}" style="color:#8eb6ff">{SOURCE_URL}</a></p>
-</body>
-</html>
-"""
+def _setup_page_html() -> str:
+    try:
+        return SETUP_HTML.read_text(encoding="utf-8")
+    except OSError:
+        return (
+            "<!DOCTYPE html><html><body><h1>Setup UI missing</h1>"
+            "<p>static/setup.html not installed. Re-run prepare/update.</p></body></html>"
+        )
 
 
 def _read_json(handler: BaseHTTPRequestHandler, limit: int = 64 * 1024) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -188,16 +179,79 @@ class Handler(BaseHTTPRequestHandler):
         _json_response(self, 401, {"ok": False, "error": "unauthorized"})
         return False
 
+    def _require_wizard_session(self) -> bool:
+        assert CTX is not None
+        sid = self.headers.get("X-Setup-Session")
+        if CTX.wizard.session_ok(sid):
+            return True
+        _json_response(self, 401, {"ok": False, "error": "setup session required"})
+        return False
+
     def do_GET(self) -> None:  # noqa: N802
         assert CTX is not None
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path in ("/setup", "/"):
-            # Unauthenticated onboarding landing (phone just joined this AP).
-            _html_response(
+            _html_response(self, 200, _setup_page_html())
+            return
+        if path == "/api/v1/wizard/status":
+            wiz = CTX.wizard.snapshot()
+            ip = peersmod.local_mgmt_ipv4()
+            _json_response(
                 self,
                 200,
-                _setup_page_html(device_label=CTX.device_label, device_id=CTX.device_id),
+                {
+                    "ok": True,
+                    "device_id": CTX.device_id,
+                    "device_label": CTX.device_label,
+                    "board_digit": board_digit(),
+                    "mgmt_ipv4": ip,
+                    "confirmed": wiz.get("confirmed"),
+                    "session_id": wiz.get("session_id") if wiz.get("confirmed") else None,
+                    "ui_step": wiz.get("ui_step"),
+                    "role": wiz.get("role"),
+                    "internet_ok": wiz.get("internet_ok"),
+                    "internet_skipped": wiz.get("internet_skipped"),
+                    "uplink_status": wiz.get("uplink_status"),
+                    "uplink_ssid": wiz.get("uplink_ssid"),
+                    "ssh": ros.ssh_ready(),
+                },
             )
+            return
+        if path == "/api/v1/wizard/internet":
+            # Allow probe before confirm (welcome page) and after.
+            probe = internetmod.probe()
+            CTX.wizard.set_uplink(
+                status="up" if probe.get("ok") else "down",
+                detail=str(probe.get("detail") or ""),
+                internet_ok=bool(probe.get("ok")),
+            )
+            _json_response(self, 200, {"ok": bool(probe.get("ok")), **probe})
+            return
+        if path == "/api/v1/wizard/peers":
+            if not self._require_wizard_session():
+                return
+            found = CTX.coord.discover()
+            candidates = []
+            for entry in found:
+                if not entry.get("reachable"):
+                    continue
+                hello = entry.get("hello") or {}
+                wiz = hello.get("wizard") or {}
+                if wiz.get("confirmed"):
+                    continue
+                if int(wiz.get("ui_step") or 1) >= 3:
+                    continue
+                candidates.append(
+                    {
+                        "addr": entry.get("addr"),
+                        "device_id": hello.get("device_id"),
+                        "device_label": hello.get("device_label"),
+                        "board_digit": hello.get("board_digit"),
+                        "ui_step": wiz.get("ui_step"),
+                        "mgmt_state": hello.get("state"),
+                    }
+                )
+            _json_response(self, 200, {"ok": True, "candidates": candidates})
             return
         if path == "/api/v1/health":
             st = CTX.store.snapshot()
@@ -291,6 +345,195 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         assert CTX is not None
         path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/api/v1/wizard/confirm":
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            snap = CTX.wizard.confirm(device_label=CTX.device_label)
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "session_id": snap.get("session_id"),
+                    "ui_step": snap.get("ui_step"),
+                    "device_id": CTX.device_id,
+                    "device_label": CTX.device_label,
+                    "board_digit": board_digit(),
+                    "mgmt_ipv4": peersmod.local_mgmt_ipv4(),
+                    "confirmed": True,
+                },
+            )
+            return
+        if path == "/api/v1/wizard/uplink/scan":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            CTX.wizard.set_uplink(status="scanning", detail="scan requested")
+            result = ros.scan_ssids(duration=int((body or {}).get("duration") or 6))
+            if not result.get("ok"):
+                CTX.wizard.set_uplink(status="error", detail=str(result.get("error") or "scan failed"))
+                _json_response(self, 502, result)
+                return
+            CTX.wizard.set_uplink(status="scanned", detail=f"{len(result.get('networks') or [])} networks")
+            _json_response(self, 200, result)
+            return
+        if path == "/api/v1/wizard/uplink/connect":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            from cot_r_mgmt import uplink_creds as creds
+
+            ssid_raw = body.get("ssid")
+            psk = body.get("psk")
+            use_stored = bool(body.get("use_stored_psk"))
+            psk_s = str(psk) if psk not in (None, "") else None
+            ssid_s, ssid_err = ros.sanitize_ssid(ssid_raw)
+            if ssid_err or not ssid_s:
+                _json_response(self, 400, {"ok": False, "error": ssid_err or "ssid required"})
+                return
+            if use_stored or (psk_s is None and creds.has_psk(ssid_s)):
+                stored = creds.get_psk(ssid_s)
+                if not stored:
+                    _json_response(
+                        self,
+                        400,
+                        {"ok": False, "error": "no stored password for this SSID; enter one"},
+                    )
+                    return
+                psk_s = stored
+            CTX.wizard.set_uplink(status="connecting", ssid=ssid_s, detail="connect requested")
+            result = ros.connect_uplink(ssid=ssid_s, psk=psk_s)
+            if not result.get("ok"):
+                CTX.wizard.set_uplink(status="error", ssid=ssid_s, detail=str(result.get("error") or ""))
+                _json_response(self, 502, result)
+                return
+            # Persist newly entered PSK (never echo it back).
+            if psk not in (None, "") and not use_stored:
+                try:
+                    creds.save_psk(ssid_s, str(psk))
+                except OSError as e:
+                    log.warning("failed to store uplink psk: %s", e)
+            elif psk_s is None:
+                try:
+                    creds.mark_open(ssid_s)
+                except OSError:
+                    pass
+            safe = {
+                "ok": True,
+                "ssid": str(result.get("ssid") or ssid_s),
+                "detail": "applied on mAP; probe internet",
+                "psk_known": creds.has_psk(ssid_s),
+            }
+            CTX.wizard.set_uplink(
+                status="connecting",
+                ssid=safe["ssid"],
+                detail=safe["detail"],
+            )
+            _json_response(self, 200, safe)
+            return
+        if path == "/api/v1/wizard/uplink/skip":
+            if not self._require_wizard_session():
+                return
+            CTX.wizard.set_uplink(
+                status="skipped",
+                detail="user skipped internet",
+                internet_ok=False,
+                skipped=True,
+            )
+            _json_response(self, 200, {"ok": True, "skipped": True})
+            return
+        if path == "/api/v1/wizard/adopt":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            addrs = [str(a) for a in (body.get("addrs") or []) if a]
+            if not CTX.peer_token:
+                _json_response(self, 503, {"ok": False, "error": "peer.token missing"})
+                return
+            # Become coordinator for demo session, then ask peers to enter wizard step 3.
+            CTX.coord.claim_local()
+            digit = board_digit()
+            adopted: list = []
+            results: list = []
+            for addr in addrs:
+                resp = peersmod.http_json(
+                    "POST",
+                    peersmod.peer_url(addr, "/api/v1/peer/wizard/adopt"),
+                    body={
+                        "controller_id": CTX.device_id,
+                        "controller_label": CTX.device_label,
+                        "controller_digit": digit,
+                    },
+                    token=CTX.peer_token,
+                )
+                results.append({"addr": addr, **resp})
+                if resp.get("ok"):
+                    adopted.append(
+                        {
+                            "addr": addr,
+                            "device_id": resp.get("device_id"),
+                            "device_label": resp.get("device_label"),
+                        }
+                    )
+            snap = CTX.wizard.become_controller(adopted=adopted)
+            _json_response(
+                self,
+                200,
+                {"ok": True, "results": results, "wizard": snap},
+            )
+            return
+        if path == "/api/v1/peer/wizard/adopt":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            controller_id = str(body.get("controller_id") or "")
+            controller_digit = str(body.get("controller_digit") or "?")
+            if not controller_id:
+                _json_response(self, 400, {"ok": False, "error": "controller_id required"})
+                return
+            # Accept peer claim shape via existing accept path if session provided,
+            # otherwise just mark wizard adopted + standby AP.
+            try:
+                from cot_r_mgmt import ap_control
+
+                CTX.wizard.become_adopted(
+                    controller_digit=controller_digit,
+                    controller_id=controller_id,
+                )
+                ap_control.standby()
+                CTX.store.set_state("Waiting", note=f"adopted_by={controller_id}")
+            except Exception as e:  # noqa: BLE001
+                _json_response(self, 500, {"ok": False, "error": str(e)})
+                return
+            _json_response(
+                self,
+                200,
+                {
+                    "ok": True,
+                    "device_id": CTX.device_id,
+                    "device_label": CTX.device_label,
+                    "board_digit": board_digit(),
+                    "wizard": CTX.wizard.snapshot(),
+                },
+            )
+            return
         if path == "/api/v1/setup/claim":
             if not self._require_api_auth():
                 return

@@ -13,6 +13,7 @@ COT_R_BASE_PACKAGES=(
   jq
   git
   rsync
+  openssh-client
 )
 
 # OLED / display foundation (Debian trixie names verified on this host).

@@ -137,6 +137,30 @@ PY
   cot_r_manifest_add_file "${COT_R_PEER_TOKEN_FILE}" "secret"
 }
 
+cot_r_ensure_map_ssh_key() {
+  # Per-node ed25519 key for passwordless SSH to the mAP (uplink scan/configure).
+  mkdir -p "${COT_R_SSH_DIR}"
+  chown "root:${COT_R_DEPLOY_USER}" "${COT_R_SSH_DIR}"
+  chmod 0750 "${COT_R_SSH_DIR}"
+  if [[ -s "${COT_R_MAP_SSH_KEY}" ]]; then
+    cot_r_info "mAP SSH key already present"
+  else
+    local comment
+    comment="cot-r@$(hostname -s 2>/dev/null || echo rockpi)"
+    ssh-keygen -t ed25519 -N "" -f "${COT_R_MAP_SSH_KEY}" -C "$comment" >/dev/null
+    cot_r_ok "Created ${COT_R_MAP_SSH_KEY}"
+    cot_r_warn "Install the public key on the mAP (see docs/map-ssh.md):"
+    echo "  $(tr -d '\n' <"${COT_R_MAP_SSH_KEY}.pub")" >&2
+  fi
+  # cot-r-mgmt runs as cot-r and must read the private key (root-only 0600 breaks scans).
+  chown "${COT_R_DEPLOY_USER}:${COT_R_DEPLOY_USER}" "${COT_R_MAP_SSH_KEY}" 2>/dev/null || true
+  chown "root:${COT_R_DEPLOY_USER}" "${COT_R_MAP_SSH_KEY}.pub" 2>/dev/null || true
+  chmod 0600 "${COT_R_MAP_SSH_KEY}"
+  chmod 0640 "${COT_R_MAP_SSH_KEY}.pub"
+  cot_r_manifest_add_file "${COT_R_MAP_SSH_KEY}" "secret"
+  cot_r_manifest_add_file "${COT_R_MAP_SSH_KEY}.pub" "pubkey"
+}
+
 cot_r_install_mgmt_sudoers() {
   local src dest
   src="${COT_R_SUDOERS_SRC}"

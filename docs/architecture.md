@@ -34,10 +34,10 @@ hints, not trust.
 | Management service | Identity, boot ID, state, demo reset API | Done (foundation) |
 | Deploy clone + update | `/opt/cot-r/src`, rollback via `deploy.json` | Done (foundation) |
 | Bridged AP (`ap-prepare` / `ap-enable`) | Bridge wlan0 to end0; mAP DHCP | Done (foundation) |
-| OLED onboarding | Step 1 Wi‑Fi QR → step 2 local `/setup` URL | Done (foundation) |
+| OLED onboarding | Steps 1–3 (Wi‑Fi QR → setup URL → gear) | Done (foundation) |
+| Setup wizard | Confirm, uplink via mAP SSH, adopt peers | Done (foundation) |
 | Peer coordination | Coordinator lease, heartbeats | Done (foundation) |
-| Portal handoff + local UI | Rich setup UI (stub `/setup` exists) | Next |
-| RouterOS client | Uplink scan/configure (backend only) | Later |
+| Richer setup UI / demo app | Post-uplink Cardano flows | Next |
 | Local setup UI | Responsive offline page | Later |
 | Demo application | Cardano demo after foundations | Later |
 

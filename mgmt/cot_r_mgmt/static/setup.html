@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Cardano on the Rocks – setup</title>
+<style>
+:root {
+  --bg: #0e141f;
+  --panel: #172033;
+  --text: #e8eefc;
+  --muted: #9aa8c7;
+  --accent: #3d8bfd;
+  --warn: #e6a23c;
+  --danger: #e05c5c;
+  --ok: #3dbe7a;
+  --font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh;
+  font-family: var(--font);
+  background: radial-gradient(1200px 600px at 10% -10%, #1c2a44, var(--bg));
+  color: var(--text);
+}
+main { max-width: 40rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+h1 { font-size: 1.45rem; margin: 0 0 .35rem; letter-spacing: -.02em; }
+h2 { font-size: 1.1rem; margin: 0 0 .75rem; }
+p, li { color: var(--muted); line-height: 1.45; }
+.card {
+  background: var(--panel);
+  border: 1px solid #243352;
+  border-radius: 12px;
+  padding: 1.1rem 1rem;
+  margin: 1rem 0;
+}
+.hidden { display: none !important; }
+button, .btn {
+  appearance: none; border: 0; border-radius: 10px;
+  padding: .7rem 1rem; font: inherit; font-weight: 600;
+  background: var(--accent); color: #fff; cursor: pointer;
+}
+button.secondary { background: #2a3a58; }
+button.warn { background: var(--warn); color: #1a1205; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.row { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .9rem; }
+.ssid {
+  display: flex; justify-content: space-between; gap: .75rem;
+  align-items: center; padding: .65rem .7rem;
+  border: 1px solid #2b3c5c; border-radius: 10px; margin: .4rem 0;
+  background: #121b2d; cursor: pointer;
+}
+.ssid:hover, .ssid.selected { border-color: var(--accent); }
+.badge {
+  font-size: .75rem; padding: .15rem .4rem; border-radius: 999px;
+  background: #243352; color: var(--text);
+}
+.badge.open { background: #244436; color: #b6f0cd; }
+.badge.psk { background: #3a2f1d; color: #ffd9a0; }
+.badge.saved { background: #1d3a3a; color: #9ee7e0; }
+.badge-row { display: flex; flex-wrap: wrap; gap: .35rem; justify-content: flex-end; }
+.linkish {
+  appearance: none; border: 0; background: none; color: var(--accent);
+  font: inherit; font-size: .85rem; padding: 0; cursor: pointer; text-decoration: underline;
+}
+#pskKnownBox .meta { margin: .35rem 0 .15rem; }
+.warnbox {
+  border: 1px solid #6a4a16; background: #2a210f; color: #ffd9a0;
+  border-radius: 10px; padding: .8rem .9rem; margin: .75rem 0;
+}
+.okbox {
+  border: 1px solid #1f5a3c; background: #13261c; color: #b6f0cd;
+  border-radius: 10px; padding: .8rem .9rem; margin: .75rem 0;
+}
+.err { color: var(--danger); }
+input[type=password], input[type=text] {
+  width: 100%; padding: .65rem .7rem; border-radius: 10px;
+  border: 1px solid #2b3c5c; background: #0f1726; color: var(--text);
+  font: inherit;
+}
+.meta { font-size: .85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <p class="meta" id="deviceMeta">Loading…</p>
+
+  <section id="view-welcome" class="card">
+    <h1>You are about to configure<br/>Cardano on the Rocks</h1>
+    <p>This phone will drive setup for this node (and optionally its neighbours). Confirm only if you meant to open this page.</p>
+    <div class="row">
+      <button id="btnConfirm" type="button">Yes, start setup</button>
+    </div>
+  </section>
+
+  <section id="view-uplink" class="card hidden">
+    <h2>Internet uplink</h2>
+    <p id="inetStatus">Checking Internet…</p>
+    <div id="inetOk" class="okbox hidden">Internet looks available. You can continue, or change the uplink SSID anytime.</div>
+    <div id="inetBad" class="warnbox hidden">No working Internet detected yet. Pick an upstream Wi‑Fi for the mAP, or skip with a warning.</div>
+    <div id="scanArea" class="hidden">
+      <div class="row">
+        <button id="btnScan" type="button" class="secondary">Scan SSIDs via mAP</button>
+      </div>
+      <div id="ssidList"></div>
+      <div id="pskKnownBox" class="okbox hidden">
+        <p>Password for <strong id="pskKnownSsid"></strong> is already stored on this node.</p>
+        <p class="meta">Ready to connect without re-entering it. Cleartext is never shown in the browser.</p>
+        <button type="button" class="linkish" id="btnChangePsk">Change password</button>
+      </div>
+      <div id="pskBox" class="hidden">
+        <p>Password for <strong id="pskSsid"></strong></p>
+        <input id="pskInput" type="password" autocomplete="current-password" placeholder="Wi‑Fi password"/>
+      </div>
+      <div class="row">
+        <button id="btnConnect" type="button" disabled>Connect mAP</button>
+        <button id="btnSkip" type="button" class="warn">Skip Internet</button>
+      </div>
+      <div id="skipWarn" class="warnbox hidden">
+        Without Internet, later wizard steps (downloads, Cardano tooling, updates) will very likely fail.
+        You can return to this page anytime to choose another SSID.
+      </div>
+    </div>
+    <div class="row">
+      <button id="btnToAdopt" type="button" class="secondary hidden">Continue</button>
+    </div>
+  </section>
+
+  <section id="view-adopt" class="card hidden">
+    <h2>Neighbour nodes</h2>
+    <p>Other RockPis still waiting on step 1/2 (nobody confirmed setup there) can join this wizard.</p>
+    <div id="peerList"></div>
+    <div class="row">
+      <button id="btnAdopt" type="button">Adopt selected</button>
+      <button id="btnAdoptSkip" type="button" class="secondary">Continue without adopting</button>
+    </div>
+    <p class="meta" id="adoptMsg"></p>
+  </section>
+
+  <section id="view-done" class="card hidden">
+    <h2>Configuring</h2>
+    <p>This node is in setup mode (OLED step 3). Uplink and neighbours can be revisited from the links below.</p>
+    <div class="row">
+      <button id="btnBackUplink" type="button" class="secondary">Uplink again</button>
+      <button id="btnBackAdopt" type="button" class="secondary">Neighbours again</button>
+    </div>
+  </section>
+
+  <p class="err" id="err"></p>
+</main>
+<script>
+(function () {
+  const state = {
+    session: sessionStorage.getItem("cot_r_setup_session") || "",
+    device: null,
+    selectedSsid: null,
+    selectedSec: null,
+    selectedPskKnown: false,
+    changingPsk: false,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => { document.querySelectorAll("main > section").forEach(s => s.classList.add("hidden")); $(id).classList.remove("hidden"); };
+  const err = (msg) => { $("err").textContent = msg || ""; };
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+    if (state.session) headers["X-Setup-Session"] = state.session;
+    const res = await fetch(path, { ...opts, headers });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || res.statusText || "request failed");
+    }
+    return data;
+  }
+
+  function paintDevice(d) {
+    state.device = d;
+    $("deviceMeta").textContent = `${d.device_label || "node"} · ${d.mgmt_ipv4 || "?"}`;
+  }
+
+  async function refreshStatus() {
+    const d = await api("/api/v1/wizard/status");
+    paintDevice(d);
+    if (d.confirmed && d.session_id) {
+      state.session = d.session_id;
+      sessionStorage.setItem("cot_r_setup_session", state.session);
+    }
+    return d;
+  }
+
+  async function goUplink() {
+    show("view-uplink");
+    err("");
+    $("scanArea").classList.remove("hidden");
+    const probe = await api("/api/v1/wizard/internet");
+    $("inetStatus").textContent = probe.ok ? "Internet probe: OK" : "Internet probe: not OK";
+    $("inetOk").classList.toggle("hidden", !probe.ok);
+    $("inetBad").classList.toggle("hidden", !!probe.ok);
+    $("btnToAdopt").classList.toggle("hidden", !probe.ok);
+    if (probe.ok) $("btnToAdopt").classList.remove("hidden");
+  }
+
+  $("btnConfirm").onclick = async () => {
+    err("");
+    try {
+      const d = await api("/api/v1/wizard/confirm", { method: "POST", body: "{}" });
+      state.session = d.session_id;
+      sessionStorage.setItem("cot_r_setup_session", state.session);
+      paintDevice(d);
+      await goUplink();
+    } catch (e) { err(e.message); }
+  };
+
+  function hidePskUi() {
+    $("pskBox").classList.add("hidden");
+    $("pskKnownBox").classList.add("hidden");
+    $("pskInput").value = "";
+    state.changingPsk = false;
+  }
+
+  function paintPskUi() {
+    const ssid = state.selectedSsid;
+    const sec = state.selectedSec;
+    const known = state.selectedPskKnown;
+    hidePskUi();
+    if (!ssid || sec !== "psk") return;
+    if (known && !state.changingPsk) {
+      $("pskKnownBox").classList.remove("hidden");
+      $("pskKnownSsid").textContent = ssid;
+      return;
+    }
+    $("pskBox").classList.remove("hidden");
+    $("pskSsid").textContent = ssid;
+    $("pskInput").focus();
+  }
+
+  $("btnChangePsk").onclick = () => {
+    state.changingPsk = true;
+    paintPskUi();
+  };
+
+  $("btnScan").onclick = async () => {
+    err("");
+    $("btnScan").disabled = true;
+    hidePskUi();
+    state.selectedSsid = null;
+    $("btnConnect").disabled = true;
+    $("ssidList").innerHTML = "<p class='meta'>Scanning via mAP (few seconds)…</p>";
+    try {
+      const d = await api("/api/v1/wizard/uplink/scan", { method: "POST", body: "{}" });
+      const list = d.networks || [];
+      if (!list.length) {
+        $("ssidList").innerHTML = "<p class='meta'>No networks parsed. Is the mAP SSH key installed? See docs/map-ssh.md</p>";
+      } else {
+        $("ssidList").innerHTML = "";
+        list.forEach((n) => {
+          const el = document.createElement("div");
+          el.className = "ssid";
+          const ssid = String(n.ssid || "");
+          const secRaw = String(n.security || "open").toLowerCase();
+          const sec = (secRaw === "open") ? "open" : "psk";
+          const known = !!n.psk_known;
+          const sig = Number.isFinite(Number(n.signal)) ? String(n.signal) : "?";
+
+          const left = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = ssid || "?";
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `${sig} dBm`;
+          left.appendChild(title);
+          left.appendChild(meta);
+
+          const badges = document.createElement("div");
+          badges.className = "badge-row";
+          const secBadge = document.createElement("span");
+          secBadge.className = `badge ${sec}`;
+          secBadge.textContent = sec === "open" ? "open" : "password";
+          badges.appendChild(secBadge);
+          if (known) {
+            const saved = document.createElement("span");
+            saved.className = "badge saved";
+            saved.textContent = "saved";
+            badges.appendChild(saved);
+          }
+
+          el.appendChild(left);
+          el.appendChild(badges);
+          el.onclick = () => {
+            document.querySelectorAll(".ssid").forEach(x => x.classList.remove("selected"));
+            el.classList.add("selected");
+            state.selectedSsid = ssid;
+            state.selectedSec = sec;
+            state.selectedPskKnown = known;
+            state.changingPsk = false;
+            $("btnConnect").disabled = false;
+            paintPskUi();
+          };
+          $("ssidList").appendChild(el);
+        });
+      }
+    } catch (e) {
+      $("ssidList").innerHTML = "";
+      err(e.message);
+    } finally {
+      $("btnScan").disabled = false;
+    }
+  };
+
+  $("btnConnect").onclick = async () => {
+    err("");
+    if (!state.selectedSsid) return;
+    const needPsk = state.selectedSec === "psk";
+    const useStored = needPsk && state.selectedPskKnown && !state.changingPsk;
+    const typed = ($("pskInput").value || "").trim();
+    if (needPsk && !useStored && typed.length < 8) {
+      err("Enter the Wi‑Fi password (at least 8 characters), or pick a saved network.");
+      return;
+    }
+    $("btnConnect").disabled = true;
+    try {
+      const body = {
+        ssid: state.selectedSsid,
+        use_stored_psk: useStored,
+        psk: useStored ? null : (typed || null),
+      };
+      await api("/api/v1/wizard/uplink/connect", { method: "POST", body: JSON.stringify(body) });
+      $("inetStatus").textContent = "mAP connect requested; probing Internet…";
+      for (let i = 0; i < 8; i++) {
+        await sleep(2500);
+        const probe = await api("/api/v1/wizard/internet");
+        if (probe.ok) {
+          $("inetOk").classList.remove("hidden");
+          $("inetBad").classList.add("hidden");
+          $("btnToAdopt").classList.remove("hidden");
+          $("inetStatus").textContent = "Internet probe: OK";
+          state.selectedPskKnown = needPsk ? true : state.selectedPskKnown;
+          state.changingPsk = false;
+          paintPskUi();
+          return;
+        }
+      }
+      $("inetBad").classList.remove("hidden");
+      err("Still no Internet after connect. Check PSK / SSID, then retry or pick another network.");
+    } catch (e) { err(e.message); }
+    finally { $("btnConnect").disabled = false; }
+  };
+
+  $("btnSkip").onclick = async () => {
+    $("skipWarn").classList.remove("hidden");
+    if (!confirm("Skip Internet setup? Later steps will likely fail without uplink.")) return;
+    err("");
+    try {
+      await api("/api/v1/wizard/uplink/skip", { method: "POST", body: "{}" });
+      await loadAdopt();
+    } catch (e) { err(e.message); }
+  };
+
+  $("btnToAdopt").onclick = () => loadAdopt();
+  $("btnBackUplink").onclick = () => goUplink();
+  $("btnBackAdopt").onclick = () => loadAdopt();
+
+  async function loadAdopt() {
+    show("view-adopt");
+    err("");
+    $("peerList").innerHTML = "<p class='meta'>Discovering neighbours…</p>";
+    try {
+      const d = await api("/api/v1/wizard/peers");
+      const peers = d.candidates || [];
+      if (!peers.length) {
+        $("peerList").innerHTML = "<p class='meta'>No adoptable neighbours (or they already confirmed setup).</p>";
+      } else {
+        $("peerList").innerHTML = "";
+        peers.forEach((p) => {
+          const id = `peer_${p.addr.replace(/\./g, "_")}`;
+          const row = document.createElement("label");
+          row.className = "ssid";
+          row.innerHTML = `<div><input type="checkbox" id="${id}" data-addr="${escapeHtml(p.addr)}" data-id="${escapeHtml(p.device_id || "")}"/>
+            <strong>${escapeHtml(p.device_label || p.addr)}</strong>
+            <div class="meta">${escapeHtml(p.addr)} · step ${p.ui_step ?? "?"}</div></div>`;
+          $("peerList").appendChild(row);
+        });
+      }
+    } catch (e) {
+      $("peerList").innerHTML = "";
+      err(e.message);
+    }
+  }
+
+  $("btnAdopt").onclick = async () => {
+    err("");
+    const addrs = [...document.querySelectorAll("#peerList input[type=checkbox]:checked")].map(x => x.dataset.addr);
+    try {
+      const d = await api("/api/v1/wizard/adopt", { method: "POST", body: JSON.stringify({ addrs }) });
+      $("adoptMsg").textContent = `Adopted ${((d.results || []).filter(r => r.ok).length)} neighbour(s).`;
+      show("view-done");
+    } catch (e) { err(e.message); }
+  };
+  $("btnAdoptSkip").onclick = () => show("view-done");
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+  }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  (async function boot() {
+    try {
+      const d = await refreshStatus();
+      if (d.confirmed) {
+        await goUplink();
+      } else {
+        show("view-welcome");
+      }
+    } catch (e) {
+      $("deviceMeta").textContent = "setup";
+      err(e.message);
+      show("view-welcome");
+    }
+  })();
+})();
+</script>
+</body>
+</html>

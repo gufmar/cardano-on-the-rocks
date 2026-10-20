@@ -1,5 +1,5 @@
 # Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
-"""AP onboarding OLED: (1) Wi-Fi QR then (2) setup-URL QR after first STA."""
+"""AP onboarding OLED: steps 1 (Wi-Fi QR), 2 (setup URL), 3 (gear / configuring)."""
 
 from __future__ import annotations
 
@@ -7,13 +7,18 @@ import logging
 import os
 import subprocess
 import threading
-import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from cot_r_mgmt import display_client
 from cot_r_mgmt import peers
 from cot_r_mgmt.state import StateStore
+from cot_r_mgmt.wizard import (
+    STEP_CONFIGURING,
+    STEP_SETUP_QR,
+    STEP_WIFI_QR,
+    WizardStore,
+)
 
 log = logging.getLogger("cot_r_mgmt.onboarding")
 
@@ -42,7 +47,6 @@ def wifi_qr_payload(ssid: str, psk: str) -> str:
 
 
 def setup_url(mgmt_ipv4: str, port: int = MGMT_PORT) -> str:
-    # Compact local setup entry (HTML stub until full UI lands).
     return f"http://{mgmt_ipv4}:{port}/setup"
 
 
@@ -74,7 +78,6 @@ def read_psk() -> Optional[str]:
 
 
 def board_digit() -> str:
-    """1|2|3 from device.env / reserved IP."""
     env_path = ETC_DIR / "device.env"
     device_id = ""
     reserved = ""
@@ -99,7 +102,6 @@ def board_digit() -> str:
 
 
 def list_stations() -> List[str]:
-    """MACs associated to the local AP (empty if AP down / no ctrl)."""
     if not Path(HOSTAPD_CLI).is_file() and not __import__("shutil").which("hostapd_cli"):
         return []
     cli = HOSTAPD_CLI if Path(HOSTAPD_CLI).is_file() else "hostapd_cli"
@@ -129,15 +131,17 @@ def ap_is_enabled() -> bool:
 
 
 class OnboardingDisplay:
-    """Background driver for the two-step OLED onboarding story."""
+    """Background driver for OLED onboarding / wizard steps."""
 
     def __init__(
         self,
         *,
         store: StateStore,
+        wizard: WizardStore,
         should_run: Optional[Callable[[], bool]] = None,
     ) -> None:
         self.store = store
+        self.wizard = wizard
         self._should_run = should_run or self._default_should_run
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -145,11 +149,17 @@ class OnboardingDisplay:
         self._seen_sta = False
 
     def _default_should_run(self) -> bool:
+        wiz = self.wizard.snapshot()
+        # Adopted / configuring boards keep step-3 OLED even if AP is off.
+        if wiz.get("ui_step", 0) >= STEP_CONFIGURING or wiz.get("role") == "adopted":
+            return True
         if not ap_is_enabled():
             return False
         st = self.store.snapshot()
-        # Waiting peers have hostapd stopped; do not advertise join QR.
         if st.get("role") == "peer" and st.get("device_state") == "Waiting":
+            # Peer waiting on coordinator: still show waiting OR step3 if adopted
+            if wiz.get("role") == "adopted":
+                return True
             return False
         return True
 
@@ -177,6 +187,28 @@ class OnboardingDisplay:
         if not self._should_run():
             self._last_step = None
             return
+
+        wiz = self.wizard.snapshot()
+        if wiz.get("ui_step", STEP_WIFI_QR) >= STEP_CONFIGURING or wiz.get("confirmed"):
+            display_client.show_onboarding(
+                step=STEP_CONFIGURING,
+                digit="3",
+                lines=["setup"],
+                qr_data="",
+                qr_side="right",
+                controlled_by=wiz.get("controlled_by"),
+            )
+            if self._last_step != STEP_CONFIGURING:
+                log.info(
+                    "onboarding step=3 board=%s role=%s ctr=%s",
+                    board_digit(),
+                    wiz.get("role"),
+                    wiz.get("controlled_by"),
+                )
+                self._last_step = STEP_CONFIGURING
+            return
+
+        # Steps 1–2 require AP credentials.
         ssid = read_ssid()
         psk = read_psk()
         if not ssid or not psk:
@@ -188,11 +220,9 @@ class OnboardingDisplay:
         stations = list_stations()
         if stations:
             self._seen_sta = True
-        # Latch: once a phone joined, stay on step 2 until demo reset / AP disable.
-        # Digits 1/2 are the onboarding sequence (not the board index).
-        step = 2 if self._seen_sta else 1
+        step = STEP_SETUP_QR if self._seen_sta else STEP_WIFI_QR
 
-        if step == 1:
+        if step == STEP_WIFI_QR:
             display_client.show_onboarding(
                 step=1,
                 digit="1",
@@ -210,15 +240,14 @@ class OnboardingDisplay:
             )
         if self._last_step != step:
             log.info(
-                "onboarding step=%s board=%s stations=%s url=%s",
+                "onboarding step=%s board=%s stations=%s",
                 step,
                 board_digit(),
                 len(stations),
-                setup_url(ip) if step == 2 else "wifi-qr",
             )
             self._last_step = step
 
     def reset_latch(self) -> None:
-        """Call on demo reset so step 1 returns."""
         self._seen_sta = False
         self._last_step = None
+        self.wizard.reset()

@@ -22,9 +22,10 @@ Incremental build. Working on RockPi 2 today:
 - Bridged AP tooling (`ap-prepare` / `ap-enable --confirm` / `ap-disable`)
 - Peer coordination (claim / lease / Waiting AP standby); see [docs/peers.md](docs/peers.md)
 
-Next: RouterOS uplink control, local setup UI, portal handoff.
+Next: richer setup UI after uplink, Cardano demo application.
 
-Not yet implemented: association portal handoff, guest-portal flow, demo application.
+Local setup wizard (confirm → uplink via mAP SSH → adopt neighbours): see
+[docs/setup-wizard.md](docs/setup-wizard.md).
 
 ## Hardware
 
@@ -159,7 +160,9 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/provisioning.md](docs/provisioning.md) | Prepare / reset behaviour |
 | [docs/deployment.md](docs/deployment.md) | Deploy user, update, rollback |
 | [docs/ap-bridging.md](docs/ap-bridging.md) | Bridged AP design |
-| [docs/onboarding-oled.md](docs/onboarding-oled.md) | OLED step 1 Wi‑Fi QR → step 2 setup URL |
+| [docs/onboarding-oled.md](docs/onboarding-oled.md) | OLED step 1–3 (Wi‑Fi / setup URL / gear) |
+| [docs/setup-wizard.md](docs/setup-wizard.md) | Phone setup wizard + uplink + adopt |
+| [docs/map-ssh.md](docs/map-ssh.md) | Per-node SSH keys for mAP uplink control |
 | [docs/addressing.md](docs/addressing.md) | Fixed RockPi management IPs |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |

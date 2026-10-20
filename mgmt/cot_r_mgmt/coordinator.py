@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional  # Any: optional WizardStore
 
 from cot_r_mgmt import ap_control
 from cot_r_mgmt import display_client
@@ -31,6 +31,7 @@ class CoordinatorService:
         device_label: str,
         boot_id: str,
         peer_token: Optional[str],
+        wizard: Any = None,
         on_waiting: Optional[Callable[[], None]] = None,
         on_initial: Optional[Callable[[], None]] = None,
     ) -> None:
@@ -39,6 +40,7 @@ class CoordinatorService:
         self.device_label = device_label
         self.boot_id = boot_id
         self.peer_token = peer_token
+        self.wizard = wizard
         self._on_waiting = on_waiting or self._default_waiting
         self._on_initial = on_initial or self._default_initial
         self._stop = threading.Event()
@@ -237,11 +239,15 @@ class CoordinatorService:
 
     def hello_payload(self) -> Dict[str, Any]:
         st = self.store.snapshot()
+        wiz = self.wizard.snapshot() if self.wizard is not None else {}
+        from cot_r_mgmt.onboarding import board_digit
+
         return {
             "ok": True,
             "device_id": self.device_id,
             "device_label": self.device_label,
             "boot_id": self.boot_id,
+            "board_digit": board_digit(),
             "state": st.get("device_state"),
             "role": st.get("role"),
             "session_id": st.get("session_id"),
@@ -249,6 +255,12 @@ class CoordinatorService:
             "coordinator_id": st.get("coordinator_id"),
             "lease_expires_at": st.get("lease_expires_at"),
             "mgmt_ipv4": peers.local_mgmt_ipv4(),
+            "wizard": {
+                "ui_step": wiz.get("ui_step"),
+                "confirmed": wiz.get("confirmed"),
+                "role": wiz.get("role"),
+                "controlled_by": wiz.get("controlled_by"),
+            },
         }
 
     def discover(self) -> List[Dict[str, Any]]:
