@@ -56,13 +56,13 @@ cot_r_fix_etc_permissions() {
   chmod 0750 "${COT_R_ETC_DIR}"
   local f
   for f in device.env mgmt.env display.env device.id api.token peer.token \
-           device-macs.map \
+           device-macs.map amaru-node.env \
            device.env.example mgmt.env.example display.env.example device-macs.map.example; do
     if [[ -e "${COT_R_ETC_DIR}/${f}" ]]; then
       chown "root:${COT_R_DEPLOY_USER}" "${COT_R_ETC_DIR}/${f}"
       case "$f" in
         *.example) chmod 0644 "${COT_R_ETC_DIR}/${f}" ;;
-        api.token|peer.token|device.id|device.env|mgmt.env|display.env|device-macs.map) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
+        api.token|peer.token|device.id|device.env|mgmt.env|display.env|device-macs.map|amaru-node.env) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
         *) chmod 0640 "${COT_R_ETC_DIR}/${f}" ;;
       esac
     fi
@@ -159,6 +159,21 @@ cot_r_ensure_map_ssh_key() {
   chmod 0640 "${COT_R_MAP_SSH_KEY}.pub"
   cot_r_manifest_add_file "${COT_R_MAP_SSH_KEY}" "secret"
   cot_r_manifest_add_file "${COT_R_MAP_SSH_KEY}.pub" "pubkey"
+}
+
+cot_r_install_amaru_helper() {
+  local src dest
+  src="${COT_R_AMARU_HELPER_SRC}"
+  dest="${COT_R_AMARU_HELPER_DEST}"
+  [[ -f "$src" ]] || die "Missing Amaru helper: ${src}"
+  mkdir -p "$(dirname "$dest")" "${COT_R_AMARU_CACHE}"
+  install -m 0755 "$src" "$dest"
+  chown root:root "$dest"
+  # Cache readable by cot-r for serving debs/snapshots to peers
+  chown "root:${COT_R_DEPLOY_USER}" "${COT_R_AMARU_CACHE}" 2>/dev/null || true
+  chmod 2775 "${COT_R_AMARU_CACHE}" 2>/dev/null || true
+  cot_r_manifest_add_file "$dest" "helper"
+  cot_r_ok "Installed ${dest}"
 }
 
 cot_r_install_mgmt_sudoers() {

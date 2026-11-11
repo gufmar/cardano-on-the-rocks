@@ -189,6 +189,52 @@ input[type=password], input[type=text] {
   font-size: .85rem;
 }
 .node-card .badge { align-self: start; }
+.node-card.disabled-impl { opacity: .45; pointer-events: none; }
+.subtabs {
+  display: flex; flex-wrap: wrap; gap: .35rem;
+  margin: 0 0 .85rem;
+}
+.subtabs button {
+  background: #2a3a58; padding: .45rem .7rem; font-size: .85rem;
+}
+.subtabs button.active { background: var(--accent); }
+.env-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 38%) 1fr;
+  gap: .4rem .65rem;
+  align-items: center;
+  padding: .45rem 0;
+  border-bottom: 1px solid #243352;
+  cursor: pointer;
+}
+.env-row:hover { background: #121b2d; }
+.env-row .ekey { font-size: .8rem; color: var(--muted); word-break: break-all; }
+.env-row .eval { font-size: .85rem; color: var(--text); word-break: break-all; }
+.env-row input {
+  width: 100%; padding: .4rem .5rem; border-radius: 8px;
+  border: 1px solid #2b3c5c; background: #0f1726; color: var(--text);
+  font: inherit; font-size: .85rem;
+}
+.dirtybar {
+  margin-top: .85rem; padding: .75rem .8rem;
+  border: 1px solid #6a4a16; background: #2a210f; border-radius: 10px;
+}
+.dirtybar.clean {
+  border-color: #1f5a3c; background: #13261c;
+}
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: .75rem; margin: .65rem 0;
+}
+.cluster-row {
+  display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0 .85rem;
+}
+.chip {
+  font-size: .75rem; padding: .25rem .55rem; border-radius: 999px;
+  background: #243352; color: var(--text);
+}
+.chip.ok { background: #1d3a3a; color: #9ee7e0; }
+.chip.warn { background: #3a2f1d; color: #ffd9a0; }
 .site-footer {
   margin-top: auto;
   padding: .85rem 1rem 1.25rem;
@@ -275,34 +321,59 @@ input[type=password], input[type=text] {
 
   <section id="view-done" class="card hidden">
     <h2>Cardano nodes</h2>
-    <p>Pick which implementation to deploy on each RockPi. Selection and install land next; this is a sneak peek of the catalog.</p>
-    <div class="node-list" id="nodeCatalog">
-      <article class="node-card target" data-node="amaru">
-        <h3>Amaru <span class="lang">Rust</span></h3>
-        <span class="badge adopted">first target</span>
-        <p>Official min ~2 GiB RAM, aarch64 packages. Fits 4 GiB RockPi; prefer tip/Mithril bootstrap on 32 GiB eMMC.</p>
-      </article>
-      <article class="node-card" data-node="dingo">
-        <h3>Dingo <span class="lang">Go</span></h3>
-        <span class="badge">later</span>
-        <p>arm64 releases; core mode aims ≤1 GiB RSS. Testnet-first today.</p>
-      </article>
-      <article class="node-card" data-node="yano">
-        <h3>Yano <span class="lang">Java</span></h3>
-        <span class="badge">later</span>
-        <p>Quarkus data node; GraalVM native needed before enabling on 4 GiB.</p>
-      </article>
-      <article class="node-card" data-node="gerolamo">
-        <h3>Gerolamo <span class="lang">TypeScript</span></h3>
-        <span class="badge">later</span>
-        <p>Bun + SQLite soft ledger. Measure RSS + DB growth on RockPi before enable.</p>
-      </article>
+    <p>Amaru is the first deployable node. Install the Debian package, Mithril-bootstrap mainnet (~10 GiB), then edit <code>/etc/default/amaru</code>.</p>
+    <div class="subtabs" id="nodeSubtabs">
+      <button type="button" data-sub="install" class="active">3.1 Install</button>
+      <button type="button" data-sub="bootstrap">3.2 Bootstrap</button>
+      <button type="button" data-sub="config">3.3 Config</button>
     </div>
-    <p class="meta" style="margin-top:.85rem">Per-board role (relay / producer), LAN neighbour peering, and WireGuard for NAT relays follow after Amaru install works.</p>
+
+    <div id="clusterStrip" class="cluster-row"></div>
+    <p class="meta" id="nodeJobMsg"></p>
+
+    <div id="sub-install">
+      <div class="node-list" id="nodeCatalog"></div>
+      <p class="meta" id="installStatus">Checking local Amaru…</p>
+      <div class="row">
+        <button id="btnInstallAmaru" type="button">Install Amaru (.deb)</button>
+        <button id="btnPushSnapshot" type="button" class="secondary">Copy snapshot to adopted</button>
+      </div>
+    </div>
+
+    <div id="sub-bootstrap" class="hidden">
+      <p id="bootstrapStatus">Mithril bootstrap downloads a mainnet ledger window into <code>/var/lib/amaru</code>.</p>
+      <div class="row">
+        <button id="btnBootstrap" type="button">Bootstrap (Mithril)</button>
+        <button id="btnWipeDb" type="button" class="warn">Wipe DB</button>
+      </div>
+      <p class="meta">Wipe is required before a fresh bootstrap if databases already exist. Demo reset does not wipe Amaru DBs.</p>
+    </div>
+
+    <div id="sub-config" class="hidden">
+      <div class="toggle-row">
+        <span>Auto-start Amaru on boot</span>
+        <button id="btnAutoStart" type="button" class="secondary compact">Off</button>
+      </div>
+      <div class="row" style="margin-top:0">
+        <button id="btnServiceStart" type="button">Start</button>
+        <button id="btnServiceStop" type="button" class="secondary">Stop</button>
+        <button id="btnServiceRestart" type="button" class="secondary">Restart</button>
+      </div>
+      <div id="envList"></div>
+      <div id="dirtyBar" class="dirtybar clean hidden">
+        <span id="dirtyMsg">No unsaved changes.</span>
+        <div class="row">
+          <button id="btnSaveEnv" type="button" disabled>Save /etc/default/amaru</button>
+          <button id="btnRestartAfterSave" type="button" class="secondary" disabled>Save + restart</button>
+        </div>
+      </div>
+      <p class="meta" style="margin-top:.75rem">Other implementations stay greyed out until enabled. Use Wipe DB then Install to switch later.</p>
+    </div>
+
     <div class="row">
-      <button id="btnDeployPreview" type="button" disabled title="Amaru install not wired yet">Deploy Amaru (soon)</button>
       <button id="btnBackUplink" type="button" class="secondary">Uplink again</button>
       <button id="btnBackAdopt" type="button" class="secondary">Neighbours again</button>
+      <button id="btnRefreshNode" type="button" class="secondary">Refresh status</button>
     </div>
   </section>
 
@@ -319,6 +390,13 @@ input[type=password], input[type=text] {
     selectedPskKnown: false,
     changingPsk: false,
     currentView: "view-welcome",
+    nodeSub: "install",
+    nodeStatus: null,
+    envOriginal: [],
+    envDraft: [],
+    envDirty: false,
+    envEditKey: null,
+    nodePoll: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -674,7 +752,260 @@ input[type=password], input[type=text] {
     }
   }
 
-  $("btnAdoptContinue").onclick = () => show("view-done");
+  $("btnAdoptContinue").onclick = () => { show("view-done"); loadNodes(); };
+
+  function setNodeSub(sub) {
+    state.nodeSub = sub;
+    document.querySelectorAll("#nodeSubtabs [data-sub]").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-sub") === sub);
+    });
+    $("sub-install").classList.toggle("hidden", sub !== "install");
+    $("sub-bootstrap").classList.toggle("hidden", sub !== "bootstrap");
+    $("sub-config").classList.toggle("hidden", sub !== "config");
+  }
+  document.querySelectorAll("#nodeSubtabs [data-sub]").forEach((btn) => {
+    btn.onclick = () => setNodeSub(btn.getAttribute("data-sub"));
+  });
+
+  function paintCatalog(catalog) {
+    const el = $("nodeCatalog");
+    el.innerHTML = "";
+    (catalog || []).forEach((c) => {
+      const art = document.createElement("article");
+      art.className = "node-card" + (c.enabled ? " target" : " disabled-impl");
+      art.innerHTML = `<h3>${c.name} <span class="lang">${c.lang || ""}</span></h3>
+        <span class="badge ${c.enabled ? "adopted" : ""}">${c.enabled ? "available" : "later"}</span>
+        <p>${c.summary || ""}</p>`;
+      el.appendChild(art);
+    });
+  }
+
+  function paintCluster(data) {
+    const strip = $("clusterStrip");
+    strip.innerHTML = "";
+    const local = data.local || {};
+    const chip = (label, ok) => {
+      const s = document.createElement("span");
+      s.className = "chip " + (ok ? "ok" : "warn");
+      s.textContent = label;
+      return s;
+    };
+    strip.appendChild(chip(
+      `local: ${local.installed ? (local.version || "installed") : "not installed"}`,
+      !!local.installed
+    ));
+    strip.appendChild(chip(
+      local.bootstrap_done || local.db_present ? "bootstrapped" : "no DB",
+      !!(local.bootstrap_done || local.db_present)
+    ));
+    strip.appendChild(chip(
+      `service ${local.service_active || "?"}`,
+      local.service_active === "active"
+    ));
+    strip.appendChild(chip(
+      local.auto_start ? "auto-start on" : "auto-start off",
+      !!local.auto_start
+    ));
+    (data.adopted || []).forEach((p) => {
+      const st = p.status || {};
+      strip.appendChild(chip(
+        `${p.device_label || p.addr}: ${st.installed ? "ok" : "missing"}`,
+        !!st.installed
+      ));
+    });
+  }
+
+  function paintInstallStatus(local, job) {
+    const parts = [];
+    if (local && local.installed) {
+      parts.push(`Amaru ${local.version || ""} installed`);
+    } else {
+      parts.push("Amaru package not installed");
+    }
+    if (job && job.running) parts.push(`job: ${job.op}…`);
+    else if (job && job.error) parts.push(`last error: ${job.error}`);
+    $("installStatus").textContent = parts.join(" · ");
+    $("bootstrapStatus").textContent = (local && (local.bootstrap_done || local.db_present))
+      ? "Databases present. Node is ready to start (or wipe to re-bootstrap)."
+      : "No databases yet. Bootstrap via Mithril over the mAP uplink (~10 GiB mainnet window).";
+    $("btnInstallAmaru").disabled = !!(job && job.running);
+    $("btnBootstrap").disabled = !!(job && job.running) || !(local && local.installed);
+    $("btnPushSnapshot").disabled = !(local && (local.bootstrap_done || local.db_present));
+    const auto = !!(local && local.auto_start);
+    $("btnAutoStart").textContent = auto ? "On" : "Off";
+    $("btnAutoStart").classList.toggle("secondary", !auto);
+  }
+
+  function paintEnv(varsList) {
+    state.envOriginal = (varsList || []).map((v) => ({ key: v.key, value: v.value }));
+    state.envDraft = state.envOriginal.map((v) => ({ ...v }));
+    state.envDirty = false;
+    state.envEditKey = null;
+    renderEnvList();
+  }
+
+  function renderEnvList() {
+    const el = $("envList");
+    el.innerHTML = "";
+    state.envDraft.forEach((v, idx) => {
+      const row = document.createElement("div");
+      row.className = "env-row";
+      const k = document.createElement("div");
+      k.className = "ekey";
+      k.textContent = v.key;
+      const right = document.createElement("div");
+      if (state.envEditKey === v.key) {
+        const inp = document.createElement("input");
+        inp.type = "text";
+        inp.value = v.value;
+        inp.oninput = () => {
+          state.envDraft[idx].value = inp.value;
+          markDirty();
+        };
+        inp.onblur = () => { state.envEditKey = null; renderEnvList(); };
+        inp.onkeydown = (ev) => {
+          if (ev.key === "Enter") { inp.blur(); }
+          if (ev.key === "Escape") {
+            state.envDraft[idx].value = (state.envOriginal[idx] || {}).value || "";
+            state.envEditKey = null;
+            markDirty();
+            renderEnvList();
+          }
+        };
+        right.appendChild(inp);
+        setTimeout(() => inp.focus(), 0);
+      } else {
+        const val = document.createElement("div");
+        val.className = "eval";
+        val.textContent = v.value || "—";
+        right.appendChild(val);
+      }
+      row.appendChild(k);
+      row.appendChild(right);
+      row.onclick = () => {
+        if (state.envEditKey === v.key) return;
+        state.envEditKey = v.key;
+        renderEnvList();
+      };
+      el.appendChild(row);
+    });
+    markDirty();
+  }
+
+  function markDirty() {
+    const dirty = JSON.stringify(state.envDraft) !== JSON.stringify(state.envOriginal);
+    state.envDirty = dirty;
+    const bar = $("dirtyBar");
+    bar.classList.remove("hidden");
+    bar.classList.toggle("clean", !dirty);
+    $("dirtyMsg").textContent = dirty
+      ? "Unsaved changes in /etc/default/amaru"
+      : "No unsaved changes.";
+    $("btnSaveEnv").disabled = !dirty;
+    $("btnRestartAfterSave").disabled = !dirty;
+  }
+
+  async function loadNodes() {
+    err("");
+    try {
+      const data = await api("/api/v1/wizard/node/status");
+      state.nodeStatus = data;
+      paintCatalog(data.catalog);
+      paintCluster(data);
+      paintInstallStatus(data.local || {}, data.job || {});
+      $("nodeJobMsg").textContent = (data.job && data.job.running)
+        ? `Running ${data.job.op}…`
+        : "";
+      if (state.nodeSub === "config" || (data.local && data.local.env_exists)) {
+        try {
+          const env = await api("/api/v1/wizard/node/env");
+          if (env.vars) paintEnv(env.vars);
+        } catch (_) { /* env may be missing until install */ }
+      }
+      if (data.job && data.job.running) {
+        if (!state.nodePoll) {
+          state.nodePoll = setInterval(() => { loadNodes().catch(() => {}); }, 3000);
+        }
+      } else if (state.nodePoll) {
+        clearInterval(state.nodePoll);
+        state.nodePoll = null;
+      }
+    } catch (e) {
+      err(e.message);
+    }
+  }
+
+  $("btnInstallAmaru").onclick = async () => {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/install", { method: "POST", body: "{}" });
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  };
+  $("btnBootstrap").onclick = async () => {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/bootstrap", { method: "POST", body: "{}" });
+      setNodeSub("bootstrap");
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  };
+  $("btnWipeDb").onclick = async () => {
+    if (!confirm("Wipe Amaru databases on this board? You will need to bootstrap again.")) return;
+    err("");
+    try {
+      await api("/api/v1/wizard/node/wipe", { method: "POST", body: "{}" });
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  };
+  $("btnPushSnapshot").onclick = async () => {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/push-snapshot", { method: "POST", body: "{}" });
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  };
+  async function serviceAction(action) {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/service", {
+        method: "POST",
+        body: JSON.stringify({ action }),
+      });
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  }
+  $("btnServiceStart").onclick = () => serviceAction("start");
+  $("btnServiceStop").onclick = () => serviceAction("stop");
+  $("btnServiceRestart").onclick = () => serviceAction("restart");
+  $("btnAutoStart").onclick = async () => {
+    const local = (state.nodeStatus || {}).local || {};
+    const next = !local.auto_start;
+    err("");
+    try {
+      await api("/api/v1/wizard/node/autostart", {
+        method: "POST",
+        body: JSON.stringify({ enabled: next }),
+      });
+      await loadNodes();
+    } catch (e) { err(e.message); }
+  };
+  async function saveEnv(restart) {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/env", {
+        method: "PUT",
+        body: JSON.stringify({ vars: state.envDraft }),
+      });
+      state.envOriginal = state.envDraft.map((v) => ({ ...v }));
+      markDirty();
+      if (restart) await serviceAction("restart");
+      else await loadNodes();
+    } catch (e) { err(e.message); }
+  }
+  $("btnSaveEnv").onclick = () => saveEnv(false);
+  $("btnRestartAfterSave").onclick = () => saveEnv(true);
+  $("btnRefreshNode").onclick = () => loadNodes();
 
   $("navMenuBtn").onclick = (e) => {
     e.stopPropagation();
@@ -706,7 +1037,10 @@ input[type=password], input[type=text] {
         }
         if (nav === "uplink") await goUplink();
         else if (nav === "adopt") await loadAdopt();
-        else if (nav === "nodes" || nav === "done") show("view-done");
+        else if (nav === "nodes" || nav === "done") {
+          show("view-done");
+          await loadNodes();
+        }
       } catch (e) { err(e.message); }
     };
   });

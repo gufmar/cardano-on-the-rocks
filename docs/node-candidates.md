@@ -8,7 +8,7 @@ storage unless a measured chain footprint forces a larger module.
 
 | Implementation | Lang | aarch64 | RAM (published / observed) | Storage note | Wizard status |
 |---|---|---|---|---|---|
-| [Amaru](https://github.com/pragma-org/amaru) | Rust | Yes (deb/rpm) | Official **2 GiB** min; Pi/community often **&lt;1–1.4 GiB** under pressure | Bootstrap without full history: **20–300 GiB** depending on Mithril depth; tip-oriented fits small disks better | **First deploy target** |
+| [Amaru](https://github.com/pragma-org/amaru) | Rust | Yes (deb/rpm) | Official **2 GiB** min; Pi/community often **&lt;1–1.4 GiB** under pressure | Current mainnet Mithril window **~10 GiB** (fits 32 GiB eMMC with headroom); full history needs larger disks | **Wizard 3.1–3.3** |
 | [Dingo](https://github.com/blinklabs-io/dingo) | Go | Yes (release + npm) | BP sizing target **≤1 GiB** RSS (`core` mode ~0.5–0.7 GiB in benches) | Testnet-first; mainnet BP not ready | Catalog later |
 | [Yano](https://github.com/bloxbean/yano) | Java | Needs verify | Quarkus/JDK 25; JVM heap fights 4 GiB unless **GraalVM native** | RocksDB chain; measure before enabling | Catalog later |
 | [Gerolamo](https://github.com/HarmonicLabs/gerolamo) | TypeScript (Bun) | Needs verify | No published envelope yet; Bun + SQLite likely lighter than JVM | Soft ledger / Mithril hydrate; measure tip DB size | Catalog later |
@@ -17,13 +17,12 @@ Haskell `cardano-node` (classic) is **out of scope** here: typical **16–24 GiB
 
 ## Amaru (priority)
 
-- Upstream: [pragma-org/amaru](https://github.com/pragma-org/amaru) ([amaru.global](https://amaru.global))
-- Install path of interest: Debian `aarch64` package + systemd unit
-- Bootstrap: `amaru node bootstrap --network=…` then `amaru node run`
-- Networking note (recent betas): outbound/inbound may still use separate TCP
-  bearers; duplex-on-outbound for NAT is a research item alongside WireGuard
-- **Disk plan:** start with **preview** or **preprod**, or mainnet with shallow /
-  tip bootstrap; do not assume full history on 32 GiB
+- Upstream: [pragma-org/amaru](https://github.com/pragma-org/amaru) · guide: [mainnet install](https://amaru.global/user-guide/mainnet/)
+- Wizard installs official **aarch64 `.deb`**, uses `/etc/default/amaru`, `amaru.service`, `amaru-bootstrap.service`
+- Default network: **mainnet** (~10 GiB Mithril window today)
+- Master bootstraps via uplink; **LAN-copies** DBs to adopted peers (no second Mithril download)
+- Auto-start off by default for venue demos; toggle in wizard 3.3
+- Networking note: duplex-on-outbound / WireGuard still later for NAT relays
 
 ## Dingo
 

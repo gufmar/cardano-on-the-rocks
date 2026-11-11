@@ -13,6 +13,9 @@ Endpoints:
   POST /api/v1/reset         (api auth)  demo reset (not project cleanup)
   GET  /api/v1/peer/hello    (peer auth) peer identity exchange
   GET  /api/v1/peer/association/lookup (peer auth) local MAC lookup
+  GET  /api/v1/wizard/node/status  (setup session) Amaru catalog + cluster status
+  POST /api/v1/wizard/node/*       (setup session) install/bootstrap/env/service/…
+  GET  /api/v1/peer/node/*   (peer auth) adopted-board Amaru ops + snapshot bundle
   POST /api/v1/peer/claim    (peer auth) accept coordinator claim
   POST /api/v1/peer/heartbeat(peer auth) refresh peer lease
   POST /api/v1/peer/release  (peer auth) session ended / leave Waiting
@@ -50,6 +53,7 @@ from cot_r_mgmt import display_client  # noqa: E402
 from cot_r_mgmt import identity  # noqa: E402
 from cot_r_mgmt import internet as internetmod  # noqa: E402
 from cot_r_mgmt import routeros as ros  # noqa: E402
+from cot_r_mgmt import amaru as amarumod  # noqa: E402
 from cot_r_mgmt.association import AssociationTracker  # noqa: E402
 from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
 from cot_r_mgmt.onboarding import OnboardingDisplay, board_digit  # noqa: E402
@@ -133,6 +137,58 @@ def _html_response(handler: BaseHTTPRequestHandler, code: int, html: str) -> Non
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(raw)
+
+
+def _http_download(
+    url: str,
+    dest: Path,
+    *,
+    token: Optional[str],
+    timeout: float = 600.0,
+) -> None:
+    import urllib.request
+
+    headers = {"User-Agent": "cot-r-mgmt-peer/1"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    partial = dest.with_suffix(dest.suffix + ".partial")
+    with urllib.request.urlopen(req, timeout=timeout) as resp, partial.open("wb") as out:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    partial.replace(dest)
+
+
+def _file_response(
+    handler: BaseHTTPRequestHandler,
+    path: Path,
+    *,
+    content_type: str = "application/octet-stream",
+    download_name: Optional[str] = None,
+) -> None:
+    if not path.is_file():
+        _json_response(handler, 404, {"ok": False, "error": "file not found"})
+        return
+    size = path.stat().st_size
+    handler.send_response(200)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(size))
+    handler.send_header("Cache-Control", "no-store")
+    if download_name:
+        handler.send_header(
+            "Content-Disposition", f'attachment; filename="{download_name}"'
+        )
+    handler.end_headers()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            handler.wfile.write(chunk)
 
 
 def _setup_page_html() -> str:
@@ -457,10 +513,88 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/api/v1/wizard/node/status":
+            if not self._require_wizard_session():
+                return
+            wiz = CTX.wizard.snapshot()
+            body = amarumod.cluster_status(
+                CTX.peer_token,
+                list(wiz.get("adopted_peers") or []),
+            )
+            _json_response(self, 200, body)
+            return
+        if path == "/api/v1/wizard/node/env":
+            if not self._require_wizard_session():
+                return
+            result = amarumod.env_get()
+            code = 200 if result.get("ok") else 404
+            _json_response(self, code, result)
+            return
+        if path == "/api/v1/peer/node/status":
+            if not self._require_peer_auth():
+                return
+            st = amarumod.status()
+            st["device_id"] = CTX.device_id
+            st["device_label"] = CTX.device_label
+            st["job"] = amarumod.job_snapshot()
+            _json_response(self, 200, st)
+            return
+        if path == "/api/v1/peer/node/snapshot/bundle":
+            if not self._require_peer_auth():
+                return
+            # Ensure export exists (sync, may take a while on first call)
+            export = amarumod.snapshot_export()
+            if not export.get("ok"):
+                _json_response(self, 409, export)
+                return
+            path_file = Path(str(export.get("path") or ""))
+            _file_response(
+                self,
+                path_file,
+                content_type="application/gzip",
+                download_name=path_file.name,
+            )
+            return
+        if path == "/api/v1/peer/node/deb":
+            if not self._require_peer_auth():
+                return
+            deb = amarumod.deb_path()
+            if not deb.get("ok"):
+                _json_response(self, 404, deb)
+                return
+            path_file = Path(str(deb.get("path") or ""))
+            _file_response(
+                self,
+                path_file,
+                content_type="application/vnd.debian.binary-package",
+                download_name=path_file.name,
+            )
+            return
         if path == "/api/v1/peer/hello":
             if not self._require_peer_auth():
                 return
             _json_response(self, 200, CTX.coord.hello_payload())
+            return
+        _json_response(self, 404, {"ok": False, "error": "not found"})
+
+    def do_PUT(self) -> None:  # noqa: N802
+        assert CTX is not None
+        path = urlparse(self.path).path.rstrip("/") or "/"
+        if path == "/api/v1/wizard/node/env":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            assert body is not None
+            vars_list = body.get("vars")
+            if not isinstance(vars_list, list):
+                _json_response(self, 400, {"ok": False, "error": "vars list required"})
+                return
+            result = amarumod.env_put(vars_list)
+            code = 200 if result.get("ok") else 500
+            _json_response(self, code, result)
             return
         _json_response(self, 404, {"ok": False, "error": "not found"})
 
@@ -779,6 +913,152 @@ class Handler(BaseHTTPRequestHandler):
                     "wizard": snap,
                 },
             )
+            return
+        if path == "/api/v1/wizard/node/install":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            version = (body or {}).get("version")
+            result = amarumod.install(str(version) if version else None)
+            _json_response(self, 200 if result.get("ok") else 409, result)
+            return
+        if path == "/api/v1/wizard/node/bootstrap":
+            if not self._require_wizard_session():
+                return
+            result = amarumod.bootstrap()
+            _json_response(self, 200 if result.get("ok") else 409, result)
+            return
+        if path == "/api/v1/wizard/node/wipe":
+            if not self._require_wizard_session():
+                return
+            result = amarumod.wipe()
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+        if path == "/api/v1/wizard/node/service":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            result = amarumod.service(str((body or {}).get("action") or ""))
+            _json_response(self, 200 if result.get("ok") else 400, result)
+            return
+        if path == "/api/v1/wizard/node/autostart":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            enabled = bool((body or {}).get("enabled"))
+            result = amarumod.set_autostart(enabled)
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+        if path == "/api/v1/wizard/node/push-snapshot":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            addrs = (body or {}).get("addrs") or []
+            if not isinstance(addrs, list) or not addrs:
+                # Default: all adopted
+                wiz = CTX.wizard.snapshot()
+                addrs = [
+                    str(p.get("addr"))
+                    for p in (wiz.get("adopted_peers") or [])
+                    if p.get("addr")
+                ]
+            addrs = [str(a) for a in addrs if a]
+            if not addrs:
+                _json_response(self, 400, {"ok": False, "error": "no adopted peers"})
+                return
+            result = amarumod.push_snapshot_job(CTX.peer_token, addrs)
+            _json_response(self, 200 if result.get("ok") else 409, result)
+            return
+        if path == "/api/v1/peer/node/install":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            master = str((body or {}).get("from_master") or "")
+            st = amarumod.status()
+            if st.get("installed"):
+                _json_response(self, 200, {**st, "skipped": True})
+                return
+            if master:
+                # Pull .deb from master cache over LAN
+                url = peersmod.peer_url(master, "/api/v1/peer/node/deb")
+                RUN = Path(os.environ.get("COT_R_RUN_DIR", "/run/cot-r"))
+                RUN.mkdir(parents=True, exist_ok=True)
+                dest = RUN / "amaru-from-master.deb"
+                try:
+                    _http_download(url, dest, token=CTX.peer_token, timeout=600)
+                except Exception as e:  # noqa: BLE001
+                    _json_response(self, 502, {"ok": False, "error": f"deb pull failed: {e}"})
+                    return
+                result = amarumod.install_file(dest, background=False)
+                _json_response(self, 200 if result.get("ok") else 500, result)
+                return
+            result = amarumod.install(background=False)
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+        if path == "/api/v1/peer/node/snapshot/pull":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            master = str((body or {}).get("master") or "")
+            url_path = str((body or {}).get("url_path") or "/api/v1/peer/node/snapshot/bundle")
+            if not master:
+                _json_response(self, 400, {"ok": False, "error": "master required"})
+                return
+            url = peersmod.peer_url(master, url_path)
+            cache = Path(os.environ.get("COT_R_AMARU_CACHE", "/var/cache/cot-r/amaru"))
+            cache.mkdir(parents=True, exist_ok=True)
+            dest = cache / "from-master-snapshot.tgz"
+            try:
+                _http_download(url, dest, token=CTX.peer_token, timeout=3600)
+            except Exception as e:  # noqa: BLE001
+                _json_response(self, 502, {"ok": False, "error": f"snapshot pull failed: {e}"})
+                return
+            result = amarumod.snapshot_import(dest)
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+        if path == "/api/v1/peer/node/service":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            result = amarumod.service(str((body or {}).get("action") or ""))
+            _json_response(self, 200 if result.get("ok") else 400, result)
+            return
+        if path == "/api/v1/peer/node/autostart":
+            if not self._require_peer_auth():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            result = amarumod.set_autostart(bool((body or {}).get("enabled")))
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
+        if path == "/api/v1/peer/node/wipe":
+            if not self._require_peer_auth():
+                return
+            result = amarumod.wipe()
+            _json_response(self, 200 if result.get("ok") else 500, result)
             return
         if path == "/api/v1/setup/claim":
             if not self._require_api_auth():

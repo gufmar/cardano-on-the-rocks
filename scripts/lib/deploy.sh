@@ -112,6 +112,15 @@ cot_r_install_from_tree() {
   [[ -d "${COT_R_MGMT_SRC}" ]] || die "Missing mgmt/ in ${tree}"
   cot_r_install_display_code
   cot_r_install_mgmt_code
+  # Helper + sudoers live in deploy tree after update
+  if [[ -f "${tree}/scripts/cot-r-amaru-helper" ]]; then
+    COT_R_AMARU_HELPER_SRC="${tree}/scripts/cot-r-amaru-helper"
+    cot_r_install_amaru_helper
+  fi
+  if [[ -f "${tree}/deploy/sudoers/cot-r-mgmt" ]]; then
+    COT_R_SUDOERS_SRC="${tree}/deploy/sudoers/cot-r-mgmt"
+    cot_r_install_mgmt_sudoers
+  fi
 }
 
 cot_r_cmd_deploy_status() {

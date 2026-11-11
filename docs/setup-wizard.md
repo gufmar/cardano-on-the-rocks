@@ -10,21 +10,34 @@ Phone-driven configuration on the RockPi that served the Wi‑Fi (no mAP captive
 4. OLED step **3**: gear icon (configuring). Optional `controlled by node X` when adopted.
 5. Web: check Internet; if needed, SSH to mAP → scan SSIDs → connect (or skip with warning)
 6. Web: discover neighbours still on steps 1–2 → adopt into this wizard
-7. Web: **Node deployment** (sneak peek): catalog of Cardano implementations;
-   Amaru is the first deployable target; roles and install come next
+7. Web: **Nodes** (Amaru first)
+    - **3.1 Install** — fetch aarch64 `.deb` via uplink, `apt install`, cache under `/var/cache/cot-r/amaru/`
+    - **3.2 Bootstrap** — Mithril mainnet window into `/var/lib/amaru` (~10 GiB); or already pre-baked
+    - **3.3 Config** — edit `/etc/default/amaru`, Start/Stop/Restart, auto-start on boot, Wipe DB
+    - **Copy snapshot to adopted** — master exports DBs; adopted peers install `.deb` from master cache and import
 
 Use the top-right step menu to jump between Start, Internet uplink, Neighbour
 nodes, and Nodes (after confirm).
 
+## Presentation prep
+
+Lab with Internet: run 3.1 + 3.2 on the controller, then **Copy snapshot to adopted**.
+At the venue, uplink + adopt still run; Nodes shows installed/bootstrapped status.
+**Auto-start** defaults off so Amaru starts only when you click Start in 3.3.
+
+Demo reset does **not** wipe Amaru databases. Use **Wipe DB** explicitly.
+
 ## Apply
 
 ```bash
-sudo ./scripts/cot-r prepare          # SSH keys + install static/setup.html
+sudo ./scripts/cot-r prepare          # helper + sudoers + setup.html
 sudo ./scripts/cot-r ap-prepare       # if AP already on
 sudo systemctl restart cot-r-display cot-r-mgmt cot-r-hostapd
 ```
 
 Install each board’s pubkey on the mAP: [map-ssh.md](map-ssh.md).
+
+Amaru upstream guide: https://amaru.global/user-guide/mainnet/
 
 ## APIs (phone /setup)
 
@@ -40,23 +53,20 @@ Install each board’s pubkey on the mAP: [map-ssh.md](map-ssh.md).
 | GET | `/api/v1/wizard/peers` | session (available / adopted / busy) |
 | POST | `/api/v1/wizard/adopt` | session `{addrs:[…]}` |
 | POST | `/api/v1/wizard/free` | session `{addr}` |
-| POST | `/api/v1/peer/wizard/adopt` | peer Bearer |
-| POST | `/api/v1/peer/wizard/free` | peer Bearer |
+| GET | `/api/v1/wizard/node/status` | session |
+| POST | `/api/v1/wizard/node/install` | session |
+| POST | `/api/v1/wizard/node/bootstrap` | session |
+| GET/PUT | `/api/v1/wizard/node/env` | session |
+| POST | `/api/v1/wizard/node/service` | session `{action}` |
+| POST | `/api/v1/wizard/node/autostart` | session `{enabled}` |
+| POST | `/api/v1/wizard/node/wipe` | session |
+| POST | `/api/v1/wizard/node/push-snapshot` | session |
+
+Peer (Bearer `peer.token`): `/api/v1/peer/node/status`, `install`, `snapshot/bundle`, `snapshot/pull`, `service`, `autostart`, `wipe`.
 
 ## Notes
 
-- Gateway is `172.27.213.1` (not `.312`).
-- Skip Internet is allowed but warned: later steps will likely fail.
-- Adoption uses peer token + marks neighbours OLED step 3 with `controlled by node <digit>`.
-- All boards must share the same `/etc/cot-r/peer.token`. A neighbour that answers
-  health but fails peer hello (auth) shows in the list as not adoptable; copy the
-  token from the controller board and restart `cot-r-mgmt` on that neighbour.
-- Demo reset (API token) on the controller: `POST /api/v1/reset` with
-  `{"scope":"demo"}` releases peers when possible and clears local wizard state.
-  After deploying new code, run the same reset (or clear
-  `/var/lib/cot-r/wizard-state.json`) on every board so all return to step 1.
-- Upstream Wi‑Fi passwords entered during uplink are stored only on the RockPi in
-  `/etc/cot-r/uplink-credentials.json` (mode `0600`). The setup UI never receives
-  cleartext; it only learns `psk_known` / `ready` so a saved SSID can be connected
-  with one tap (or “Change password” to replace it). The live key on the mAP stays
-  in security profile `uplink`.
+- Env file path is `/etc/default/amaru` (Debian package).
+- Privileged ops go through `/opt/cot-r/bin/cot-r-amaru-helper` (sudoers).
+- Upstream Wi‑Fi passwords stay in `/etc/cot-r/uplink-credentials.json` (mode `0600`).
+- `POST /api/v1/reset` with `{"scope":"demo"}` releases peers and clears wizard state; Amaru DBs remain.

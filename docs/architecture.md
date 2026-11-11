@@ -39,8 +39,8 @@ hints, not trust.
 | Peer coordination | Coordinator lease, heartbeats | Done (stage 8) |
 | Captive portal / guest portal | Original briefing 11–12 | **Skipped** (RockPi AP + OLED QR) |
 | Association reporting | Optional hostapd STA diagnostic | Optional (not required for setup) |
-| Node catalog (wizard step 3) | Choose Amaru / Dingo / … per board | Next (sneak peek in UI) |
-| Amaru deploy | aarch64 package + systemd on RockPi | Next |
+| Amaru wizard 3.1–3.3 | Install, Mithril bootstrap, env editor, auto-start | In progress |
+| LAN snapshot to adopted | Master → peer DB copy | In progress |
 | Roles + LAN peers | relay / producer; fixed neighbour peering | Later |
 | Relay WireGuard egress | Public IP:port behind NAT / hotel Wi‑Fi | Later |
 | Producer secrets UI | Stake pool keys / wallets | Later |

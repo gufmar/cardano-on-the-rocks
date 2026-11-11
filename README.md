@@ -23,10 +23,10 @@ Incremental build. Working on RockPi 2 today:
 - Peer coordination (claim / lease / Waiting AP standby); see [docs/peers.md](docs/peers.md)
 - Local setup wizard (confirm → mAP uplink → adopt/release neighbours); see
   [docs/setup-wizard.md](docs/setup-wizard.md)
-Next: wizard step 3 node catalog (Amaru first), then deploy / relay roles /
-LAN peering / WireGuard. See [docs/roadmap.md](docs/roadmap.md) and
-[docs/node-candidates.md](docs/node-candidates.md). Captive-portal stages from
-the original briefing are skipped (RockPi AP + OLED QR).
+Next: finish Amaru venue polish, then relay/producer roles, LAN peering, and
+WireGuard. See [docs/roadmap.md](docs/roadmap.md) and
+[docs/node-candidates.md](docs/node-candidates.md). Wizard Nodes steps 3.1–3.3
+install Amaru (mainnet Mithril ~10 GiB) and copy snapshots to adopted peers.
 
 ## Hardware
 

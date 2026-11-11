@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+# Privileged Amaru ops for cot-r-mgmt (invoked via sudo -n).
+# Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
+set -euo pipefail
+
+AMARU_ENV_FILE="${AMARU_ENV_FILE:-/etc/default/amaru}"
+AMARU_HOME="${AMARU_HOME:-/var/lib/amaru}"
+AMARU_SERVICE="${AMARU_SERVICE:-amaru.service}"
+AMARU_BOOTSTRAP_SERVICE="${AMARU_BOOTSTRAP_SERVICE:-amaru-bootstrap.service}"
+COT_R_ETC="${COT_R_ETC_DIR:-/etc/cot-r}"
+COT_R_AMARU_CONF="${COT_R_ETC}/amaru-node.env"
+COT_R_CACHE="${COT_R_AMARU_CACHE:-/var/cache/cot-r/amaru}"
+COT_R_RUN="${COT_R_RUN_DIR:-/run/cot-r}"
+GH_REPO="${COT_R_AMARU_GH_REPO:-pragma-org/amaru}"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  aarch64|arm64) DEB_ARCH=aarch64 ;;
+  x86_64|amd64) DEB_ARCH=x86_64 ;;
+  *) echo "{\"ok\":false,\"error\":\"unsupported arch ${ARCH}\"}" >&2; exit 2 ;;
+esac
+
+json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()[:-1] if False else sys.argv[1]))' "$1"
+}
+
+ensure_conf() {
+  mkdir -p "${COT_R_ETC}"
+  if [[ ! -f "${COT_R_AMARU_CONF}" ]]; then
+    cat >"${COT_R_AMARU_CONF}" <<'EOF'
+# cot-r Amaru presentation / wizard flags (not Amaru upstream)
+COT_R_NODE_IMPL=none
+COT_R_AMARU_AUTO_START=0
+COT_R_AMARU_BOOTSTRAP_DONE=0
+COT_R_AMARU_VERSION=
+EOF
+    chmod 0640 "${COT_R_AMARU_CONF}"
+    chown root:cot-r "${COT_R_AMARU_CONF}" 2>/dev/null || true
+  fi
+}
+
+read_conf_var() {
+  local key="$1" default="${2:-}"
+  ensure_conf
+  local line
+  line="$(grep -E "^${key}=" "${COT_R_AMARU_CONF}" 2>/dev/null | tail -n1 || true)"
+  if [[ -z "$line" ]]; then
+    printf '%s' "$default"
+    return
+  fi
+  printf '%s' "${line#*=}"
+}
+
+set_conf_var() {
+  local key="$1" val="$2"
+  ensure_conf
+  if grep -qE "^${key}=" "${COT_R_AMARU_CONF}" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "${COT_R_AMARU_CONF}"
+  else
+    echo "${key}=${val}" >>"${COT_R_AMARU_CONF}"
+  fi
+}
+
+package_installed() {
+  dpkg -s amaru >/dev/null 2>&1
+}
+
+package_version() {
+  if package_installed; then
+    dpkg-query -W -f='${Version}' amaru 2>/dev/null || true
+  fi
+}
+
+service_state() {
+  local unit="$1"
+  systemctl is-active "$unit" 2>/dev/null || echo inactive
+}
+
+service_enabled() {
+  local unit="$1"
+  systemctl is-enabled "$unit" 2>/dev/null || echo disabled
+}
+
+db_present() {
+  local net
+  net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+  net="${net:-mainnet}"
+  [[ -d "${AMARU_HOME}/chain.${net}.db" || -d "${AMARU_HOME}/ledger.${net}.db" ]]
+}
+
+cmd_status() {
+  ensure_conf
+  local installed="false" ver="" active="" enabled="" boot_active="" boot_done auto_start impl
+  if package_installed; then
+    installed="true"
+    ver="$(package_version)"
+  fi
+  active="$(service_state "${AMARU_SERVICE}")"
+  enabled="$(service_enabled "${AMARU_SERVICE}")"
+  boot_active="$(service_state "${AMARU_BOOTSTRAP_SERVICE}")"
+  boot_done="$(read_conf_var COT_R_AMARU_BOOTSTRAP_DONE 0)"
+  auto_start="$(read_conf_var COT_R_AMARU_AUTO_START 0)"
+  impl="$(read_conf_var COT_R_NODE_IMPL none)"
+  local has_db="false"
+  if db_present; then has_db="true"; fi
+  if [[ "$has_db" == true && "$boot_done" != "1" ]]; then
+    boot_done=1
+    set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
+  fi
+  local env_exists="false"
+  [[ -f "${AMARU_ENV_FILE}" ]] && env_exists="true"
+  local boot_done_json="false" auto_json="false"
+  [[ "$boot_done" == "1" ]] && boot_done_json="true"
+  [[ "$auto_start" == "1" ]] && auto_json="true"
+  python3 -c 'import json,sys; print(json.dumps({
+    "ok": True,
+    "impl": sys.argv[1],
+    "installed": sys.argv[2] == "true",
+    "version": sys.argv[3],
+    "service_active": sys.argv[4],
+    "service_enabled": sys.argv[5],
+    "bootstrap_active": sys.argv[6],
+    "bootstrap_done": sys.argv[7] == "true",
+    "db_present": sys.argv[8] == "true",
+    "auto_start": sys.argv[9] == "true",
+    "env_file": sys.argv[10],
+    "env_exists": sys.argv[11] == "true",
+    "home": sys.argv[12],
+    "cache_dir": sys.argv[13],
+  }))' \
+    "$impl" "$installed" "$ver" "$active" "$enabled" "$boot_active" \
+    "$boot_done_json" "$has_db" "$auto_json" \
+    "${AMARU_ENV_FILE}" "$env_exists" "${AMARU_HOME}" "${COT_R_CACHE}"
+}
+
+resolve_version() {
+  local pinned="${1:-}"
+  if [[ -n "$pinned" ]]; then
+    printf '%s' "$pinned"
+    return
+  fi
+  pinned="$(read_conf_var COT_R_AMARU_VERSION "")"
+  if [[ -n "$pinned" ]]; then
+    printf '%s' "$pinned"
+    return
+  fi
+  if [[ -n "${COT_R_AMARU_VERSION:-}" ]]; then
+    printf '%s' "${COT_R_AMARU_VERSION}"
+    return
+  fi
+  # Latest release tag from GitHub (strip leading v)
+  local tag
+  tag="$(curl -fsSL "https://api.github.com/repos/${GH_REPO}/releases/latest" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name") or "")' 2>/dev/null || true)"
+  tag="${tag#v}"
+  if [[ -z "$tag" ]]; then
+    echo "{\"ok\":false,\"error\":\"could not resolve latest Amaru release\"}" >&2
+    exit 1
+  fi
+  printf '%s' "$tag"
+}
+
+cmd_install_file() {
+  local path="${1:-}"
+  [[ -n "$path" && -f "$path" ]] || { echo '{"ok":false,"error":"deb file required"}' >&2; exit 1; }
+  DEBIAN_FRONTEND=noninteractive apt-get install -y "$path"
+  local version
+  version="$(package_version)"
+  if [[ ! -f "${AMARU_ENV_FILE}" ]]; then
+    cat >"${AMARU_ENV_FILE}" <<'EOF'
+AMARU_NETWORK=mainnet
+AMARU_DB_CHAIN=/var/lib/amaru/chain.mainnet.db
+AMARU_DB_LEDGER=/var/lib/amaru/ledger.mainnet.db
+AMARU_DB_CHAIN_AUTOMATIC_MIGRATION=true
+AMARU_PID_EXPORT=/run/amaru/amaru.pid
+AMARU_WITH_JSON_TRACES=true
+EOF
+  else
+    if ! grep -qE '^AMARU_NETWORK=' "${AMARU_ENV_FILE}"; then
+      echo "AMARU_NETWORK=mainnet" >>"${AMARU_ENV_FILE}"
+    fi
+  fi
+  set_conf_var COT_R_NODE_IMPL amaru
+  [[ -n "$version" ]] && set_conf_var COT_R_AMARU_VERSION "$version"
+  if [[ "$(read_conf_var COT_R_AMARU_AUTO_START 0)" != "1" ]]; then
+    systemctl disable "${AMARU_SERVICE}" 2>/dev/null || true
+  fi
+  cmd_status
+}
+
+cmd_install() {
+  local version
+  version="$(resolve_version "${1:-}")"
+  mkdir -p "${COT_R_CACHE}"
+  local deb="amaru-${version}-linux-${DEB_ARCH}.deb"
+  local path="${COT_R_CACHE}/${deb}"
+  local url="https://github.com/${GH_REPO}/releases/download/v${version}/${deb}"
+  if [[ ! -f "$path" ]]; then
+    curl -fL --retry 3 -o "${path}.partial" "$url"
+    mv "${path}.partial" "$path"
+  fi
+  cmd_install_file "$path"
+}
+
+cmd_bootstrap() {
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  if db_present; then
+    echo '{"ok":false,"error":"databases already present; wipe first"}' >&2
+    exit 1
+  fi
+  # Prefer one-shot bootstrap unit when available
+  if systemctl list-unit-files "${AMARU_BOOTSTRAP_SERVICE}" >/dev/null 2>&1; then
+    systemctl reset-failed "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+    systemctl start "${AMARU_BOOTSTRAP_SERVICE}"
+  else
+    local net
+    net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+    net="${net:-mainnet}"
+    sudo -u amaru amaru node bootstrap --network "$net"
+  fi
+  if db_present; then
+    set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
+  fi
+  cmd_status
+}
+
+cmd_wipe() {
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+  systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+  if command -v amaru >/dev/null 2>&1; then
+    local net
+    net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
+    net="${net:-mainnet}"
+    sudo -u amaru amaru node rm --wipe-all-dbs --network "$net" 2>/dev/null || true
+  fi
+  # Fallback remove
+  rm -rf "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db "${AMARU_HOME}/snapshots" 2>/dev/null || true
+  set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 0
+  cmd_status
+}
+
+cmd_env_get() {
+  if [[ ! -f "${AMARU_ENV_FILE}" ]]; then
+    echo '{"ok":false,"error":"env file missing"}' >&2
+    exit 1
+  fi
+  # Emit JSON {ok, path, vars:[{key,value,raw}]}
+  python3 - "${AMARU_ENV_FILE}" <<'PY'
+import json, sys
+path = sys.argv[1]
+vars_ = []
+raw_lines = []
+with open(path, encoding="utf-8") as f:
+    for line in f:
+        raw_lines.append(line.rstrip("\n"))
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        vars_.append({"key": k.strip(), "value": v.strip()})
+print(json.dumps({"ok": True, "path": path, "vars": vars_, "text": "\n".join(raw_lines) + ("\n" if raw_lines else "")}))
+PY
+}
+
+cmd_env_write() {
+  # Write from a staging file written by mgmt under /run/cot-r/
+  local src="${1:-}"
+  [[ -n "$src" && -f "$src" ]] || { echo '{"ok":false,"error":"staging file required"}' >&2; exit 1; }
+  case "$src" in
+    "${COT_R_RUN}"/*) ;;
+    *) echo '{"ok":false,"error":"staging path must be under /run/cot-r"}' >&2; exit 1 ;;
+  esac
+  install -m 0644 -o root -g root "$src" "${AMARU_ENV_FILE}"
+  cmd_env_get
+}
+
+cmd_service() {
+  local action="$1"
+  case "$action" in
+    start|stop|restart)
+      systemctl "$action" "${AMARU_SERVICE}"
+      ;;
+    *)
+      echo '{"ok":false,"error":"bad service action"}' >&2
+      exit 1
+      ;;
+  esac
+  cmd_status
+}
+
+cmd_autostart() {
+  local enabled="$1"
+  ensure_conf
+  if [[ "$enabled" == "1" || "$enabled" == "true" || "$enabled" == "on" ]]; then
+    set_conf_var COT_R_AMARU_AUTO_START 1
+    systemctl enable "${AMARU_SERVICE}"
+    systemctl start "${AMARU_SERVICE}" || true
+  else
+    set_conf_var COT_R_AMARU_AUTO_START 0
+    systemctl disable "${AMARU_SERVICE}" 2>/dev/null || true
+    # Do not force-stop; operator may have started manually for the session
+  fi
+  cmd_status
+}
+
+cmd_snapshot_export() {
+  local dest="${1:-}"
+  [[ -n "$dest" ]] || { echo '{"ok":false,"error":"dest path required"}' >&2; exit 1; }
+  case "$dest" in
+    "${COT_R_CACHE}"/*|"${COT_R_RUN}"/*|/var/cache/cot-r/amaru/*) ;;
+    *) echo '{"ok":false,"error":"export path not allowed"}' >&2; exit 1 ;;
+  esac
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  db_present || { echo '{"ok":false,"error":"no databases to export"}' >&2; exit 1; }
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+  mkdir -p "$(dirname "$dest")"
+  # Pack chain/ledger/snapshots under amaru home
+  tar -C "${AMARU_HOME}" -czf "$dest" \
+    --exclude='./lost+found' \
+    $(cd "${AMARU_HOME}" && ls -d chain.*.db ledger.*.db snapshots 2>/dev/null || true)
+  chown root:cot-r "$dest" 2>/dev/null || true
+  chmod 0640 "$dest" 2>/dev/null || true
+  local bytes
+  bytes="$(stat -c%s "$dest" 2>/dev/null || echo 0)"
+  python3 -c "import json; print(json.dumps({'ok':True,'path':'''$dest''','bytes':int('$bytes')}))"
+}
+
+cmd_snapshot_import() {
+  local src="${1:-}"
+  [[ -n "$src" && -f "$src" ]] || { echo '{"ok":false,"error":"archive required"}' >&2; exit 1; }
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+  systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+  # Wipe existing DBs then unpack
+  rm -rf "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db "${AMARU_HOME}/snapshots" 2>/dev/null || true
+  mkdir -p "${AMARU_HOME}"
+  tar -C "${AMARU_HOME}" -xzf "$src"
+  chown -R amaru:amaru "${AMARU_HOME}" 2>/dev/null || true
+  set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
+  set_conf_var COT_R_NODE_IMPL amaru
+  cmd_status
+}
+
+cmd_deb_path() {
+  # Print path to cached deb for a version (or latest cached / resolved)
+  local version
+  version="$(resolve_version "${1:-}")"
+  local deb="amaru-${version}-linux-${DEB_ARCH}.deb"
+  local path="${COT_R_CACHE}/${deb}"
+  if [[ ! -f "$path" ]]; then
+    mkdir -p "${COT_R_CACHE}"
+    curl -fL --retry 3 -o "${path}.partial" \
+      "https://github.com/${GH_REPO}/releases/download/v${version}/${deb}"
+    mv "${path}.partial" "$path"
+  fi
+  python3 -c "import json; print(json.dumps({'ok':True,'version':'''$version''','path':'''$path'''}))"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: cot-r-amaru-helper <command> [args]
+  status
+  install [version]
+  install-file <deb-path>
+  bootstrap
+  wipe
+  env-get
+  env-write <staging-file-under-/run/cot-r>
+  service-start|service-stop|service-restart
+  enable-autostart|disable-autostart
+  snapshot-export <path>
+  snapshot-import <path>
+  deb-path [version]
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  shift || true
+  case "$cmd" in
+    status) cmd_status ;;
+    install) cmd_install "${1:-}" ;;
+    install-file) cmd_install_file "${1:-}" ;;
+    bootstrap) cmd_bootstrap ;;
+    wipe) cmd_wipe ;;
+    env-get) cmd_env_get ;;
+    env-write) cmd_env_write "${1:-}" ;;
+    service-start) cmd_service start ;;
+    service-stop) cmd_service stop ;;
+    service-restart) cmd_service restart ;;
+    enable-autostart) cmd_autostart 1 ;;
+    disable-autostart) cmd_autostart 0 ;;
+    snapshot-export) cmd_snapshot_export "${1:-}" ;;
+    snapshot-import) cmd_snapshot_import "${1:-}" ;;
+    deb-path) cmd_deb_path "${1:-}" ;;
+    -h|--help|help) usage ;;
+    *)
+      echo "{\"ok\":false,\"error\":\"unknown command: ${cmd}\"}" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

@@ -33,6 +33,7 @@ cot_r_cmd_prepare() {
   cot_r_ensure_device_id_file
   cot_r_ensure_api_token
   cot_r_ensure_peer_token
+  cot_r_install_amaru_helper
   cot_r_install_mgmt_sudoers
   cot_r_fix_etc_permissions
   # Resolve THIS board's reserved IP + hostname before SSH key / static network.
