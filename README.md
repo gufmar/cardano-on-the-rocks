@@ -165,6 +165,7 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/setup-wizard.md](docs/setup-wizard.md) | Phone setup wizard + uplink + adopt |
 | [docs/roadmap.md](docs/roadmap.md) | Revised stages (nodes, roles, WireGuard) |
 | [docs/node-candidates.md](docs/node-candidates.md) | Amaru / Dingo / Yano / Gerolamo vs 4 GiB / 32 GiB |
+| [docs/amaru-operator-ui.md](docs/amaru-operator-ui.md) | Post-start UI: BLE companion vs HTTP |
 | [docs/map-ssh.md](docs/map-ssh.md) | Per-node SSH keys for mAP uplink control |
 | [docs/addressing.md](docs/addressing.md) | Fixed RockPi management IPs |
 | [docs/licensing.md](docs/licensing.md) | AGPL evaluation and tradeoffs |

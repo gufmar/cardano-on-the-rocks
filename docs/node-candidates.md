@@ -22,6 +22,7 @@ Haskell `cardano-node` (classic) is **out of scope** here: typical **16–24 GiB
 - Default network: **mainnet** (~10 GiB Mithril window today)
 - Master bootstraps via uplink; **LAN-copies** DBs to adopted peers (no second Mithril download)
 - Auto-start off by default for venue demos; toggle in wizard 3.3
+- Post-start observe UI in wizard 3.3 (journal projection); see [amaru-operator-ui.md](amaru-operator-ui.md)
 - Networking note: duplex-on-outbound / WireGuard still later for NAT relays
 
 ## Dingo

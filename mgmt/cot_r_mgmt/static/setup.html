@@ -198,6 +198,65 @@ input[type=password], input[type=text] {
   background: #2a3a58; padding: .45rem .7rem; font-size: .85rem;
 }
 .subtabs button.active { background: var(--accent); }
+.observe {
+  margin: .85rem 0 0;
+  border: 1px solid #243352;
+  border-radius: 12px;
+  background: #121b2d;
+  padding: .75rem .8rem;
+}
+.observe h3 {
+  margin: 0 0 .55rem;
+  font-size: .95rem;
+  color: var(--text);
+}
+.observe-tabs {
+  display: flex; flex-wrap: wrap; gap: .3rem;
+  margin: 0 0 .65rem;
+}
+.observe-tabs button {
+  background: #243352; padding: .35rem .6rem; font-size: .8rem;
+}
+.observe-tabs button.active { background: var(--accent); }
+.observe-panel { display: none; }
+.observe-panel.active { display: block; }
+.kv {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 36%) 1fr;
+  gap: .25rem .55rem;
+  font-size: .85rem;
+}
+.kv .k { color: var(--muted); }
+.kv .v { color: var(--text); word-break: break-all; }
+.meter {
+  height: .55rem;
+  border-radius: 999px;
+  background: #243352;
+  overflow: hidden;
+  margin: .55rem 0 .2rem;
+}
+.meter > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #2a8f5a, var(--ok));
+  width: 0%;
+}
+.peer-mini {
+  display: flex; justify-content: space-between; gap: .5rem;
+  padding: .35rem 0;
+  border-bottom: 1px solid #1c2740;
+  font-size: .82rem;
+}
+.peer-mini:last-child { border-bottom: 0; }
+.peer-mini .addr { color: var(--text); word-break: break-all; }
+.peer-mini .meta { color: var(--muted); white-space: nowrap; }
+.recent-line {
+  font-size: .78rem;
+  color: var(--muted);
+  padding: .2rem 0;
+  border-bottom: 1px solid #1c2740;
+}
+.recent-line:last-child { border-bottom: 0; }
 .env-row {
   display: grid;
   grid-template-columns: minmax(7rem, 38%) 1fr;
@@ -353,6 +412,24 @@ input[type=password], input[type=text] {
     </div>
 
     <div id="sub-config" class="hidden">
+      <div id="runStatusBox" class="okbox">
+        <p id="runStatusTitle" style="margin:0 0 .35rem;color:inherit"><strong>Node status</strong></p>
+        <p id="runStatusDetail" class="meta" style="margin:0;color:inherit">—</p>
+        <p id="runStatusTip" class="meta" style="margin:.45rem 0 0;color:inherit"></p>
+      </div>
+      <div id="observeBox" class="observe hidden">
+        <h3>Amaru observe</h3>
+        <div class="observe-tabs" id="observeTabs">
+          <button type="button" data-obs="overview" class="active">Overview</button>
+          <button type="button" data-obs="sync">Sync</button>
+          <button type="button" data-obs="peers">Peers</button>
+          <button type="button" data-obs="host">Host</button>
+        </div>
+        <div id="obs-overview" class="observe-panel active"></div>
+        <div id="obs-sync" class="observe-panel"></div>
+        <div id="obs-peers" class="observe-panel"></div>
+        <div id="obs-host" class="observe-panel"></div>
+      </div>
       <div class="toggle-row">
         <span>Auto-start Amaru on boot</span>
         <button id="btnAutoStart" type="button" class="secondary compact">Off</button>
@@ -400,6 +477,7 @@ input[type=password], input[type=text] {
     envDirty: false,
     envEditKey: null,
     nodePoll: null,
+    observeTab: "overview",
   };
 
   const $ = (id) => document.getElementById(id);
@@ -769,6 +847,21 @@ input[type=password], input[type=text] {
   document.querySelectorAll("#nodeSubtabs [data-sub]").forEach((btn) => {
     btn.onclick = () => setNodeSub(btn.getAttribute("data-sub"));
   });
+  document.querySelectorAll("#observeTabs [data-obs]").forEach((btn) => {
+    btn.onclick = () => {
+      state.observeTab = btn.getAttribute("data-obs");
+      if (state.nodeStatus && state.nodeStatus.local) {
+        paintObserve(state.nodeStatus.local);
+      } else {
+        document.querySelectorAll("#observeTabs [data-obs]").forEach((b) => {
+          b.classList.toggle("active", b.getAttribute("data-obs") === state.observeTab);
+        });
+        document.querySelectorAll(".observe-panel").forEach((p) => {
+          p.classList.toggle("active", p.id === "obs-" + state.observeTab);
+        });
+      }
+    };
+  });
 
   function paintCatalog(catalog) {
     const el = $("nodeCatalog");
@@ -805,6 +898,17 @@ input[type=password], input[type=text] {
       `service ${local.service_active || "?"}`,
       local.service_active === "active"
     ));
+    if (local.service_active === "active" && local.run && local.run.slot != null) {
+      strip.appendChild(chip(`tip slot ${local.run.slot}`, true));
+      if (local.run.gap_blocks != null) {
+        strip.appendChild(chip(
+          local.run.gap_blocks <= 50
+            ? ("near tip (−" + local.run.gap_blocks + ")")
+            : (local.run.gap_blocks + " behind"),
+          local.run.gap_blocks <= 50
+        ));
+      }
+    }
     strip.appendChild(chip(
       local.auto_start ? "auto-start on" : "auto-start off",
       !!local.auto_start
@@ -868,6 +972,144 @@ input[type=password], input[type=text] {
     }
   }
 
+  function shortHash(h) {
+    if (!h) return "—";
+    const s = String(h);
+    return s.length > 16 ? s.slice(0, 16) + "…" : s;
+  }
+
+  function kvHtml(rows) {
+    return '<div class="kv">' + rows.map(([k, v]) =>
+      '<div class="k">' + k + '</div><div class="v">' + (v == null || v === "" ? "—" : v) + '</div>'
+    ).join("") + '</div>';
+  }
+
+  function paintObserve(local) {
+    const box = $("observeBox");
+    const run = (local && local.run) || {};
+    const active = local && (local.service_active === "active" || local.service_active === "activating");
+    if (!active) {
+      box.classList.add("hidden");
+      return;
+    }
+    box.classList.remove("hidden");
+    document.querySelectorAll("#observeTabs [data-obs]").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-obs") === state.observeTab);
+    });
+    document.querySelectorAll(".observe-panel").forEach((p) => {
+      p.classList.toggle("active", p.id === "obs-" + state.observeTab);
+    });
+
+    const net = run.network_tip || {};
+    const pct = run.sync_pct != null ? Number(run.sync_pct) : null;
+    const phaseLabel = run.phase === "near_tip"
+      ? "Near tip"
+      : (run.phase === "catching_up" ? "Catching up" : (run.phase || "Running"));
+
+    $("obs-overview").innerHTML =
+      kvHtml([
+        ["Phase", phaseLabel],
+        ["Local tip", run.slot != null
+          ? ("slot " + run.slot + (run.block_no != null ? " · block " + run.block_no : ""))
+          : "waiting…"],
+        ["Network tip", net.slot != null
+          ? ("slot " + net.slot + (net.block_no != null ? " · block " + net.block_no : ""))
+          : (net.block_no != null ? ("block " + net.block_no) : "—")],
+        ["Behind", run.gap_blocks != null
+          ? (run.gap_blocks + " blocks"
+            + (run.gap_slots != null ? " · " + run.gap_slots + " slots" : ""))
+          : (run.gap_slots != null ? (run.gap_slots + " slots") : "—")],
+        ["Header", shortHash(run.header_hash)],
+        ["Peers seen", (run.peers && run.peers.length) ? String(run.peers.length) : "—"],
+      ])
+      + (pct != null
+        ? ('<div class="meter" title="sync toward observed tip"><span style="width:'
+          + Math.max(0, Math.min(100, pct)) + '%"></span></div>'
+          + '<p class="meta" style="margin:0">' + pct + '% of observed network tip height</p>')
+        : "");
+
+    const counts = run.event_counts || {};
+    const countRows = Object.keys(counts).slice(0, 8).map((k) => [k, String(counts[k])]);
+    const recent = (run.recent || []).slice().reverse();
+    $("obs-sync").innerHTML =
+      kvHtml([
+        ["Local slot", run.slot],
+        ["Local block", run.block_no],
+        ["Network slot", net.slot],
+        ["Network block", net.block_no],
+        ["Gap (blocks)", run.gap_blocks],
+        ["Gap (slots)", run.gap_slots],
+        ["Sync %", pct != null ? (pct + "%") : null],
+      ])
+      + (countRows.length
+        ? ('<p class="meta" style="margin:.65rem 0 .25rem">Recent journal event counts</p>'
+          + kvHtml(countRows))
+        : "")
+      + (recent.length
+        ? ('<p class="meta" style="margin:.65rem 0 .25rem">Latest interesting events</p>'
+          + recent.map((ev) => {
+            const bits = [ev.message];
+            if (ev.outcome) bits.push(ev.outcome);
+            if (ev.peer) bits.push(ev.peer);
+            if (ev.slot != null) bits.push("slot " + ev.slot);
+            return '<div class="recent-line">' + bits.join(" · ") + '</div>';
+          }).join(""))
+        : "");
+
+    const peers = run.peers || [];
+    $("obs-peers").innerHTML = peers.length
+      ? peers.map((p) =>
+        '<div class="peer-mini"><div class="addr">' + p.addr + '</div>'
+        + '<div class="meta">' + (p.events || 0)
+        + (p.last_message ? (" · " + p.last_message) : "")
+        + '</div></div>'
+      ).join("")
+      : '<p class="meta" style="margin:0">No peer fields in recent journals yet.</p>';
+
+    const host = run.host || {};
+    $("obs-host").innerHTML = kvHtml([
+      ["Load (1/5/15)", [host.load1, host.load5, host.load15]
+        .map((x) => (x == null ? "—" : Number(x).toFixed(2))).join(" / ")],
+      ["CPUs", host.nproc],
+      ["Mem used", host.mem_used_pct != null ? (host.mem_used_pct + "%") : null],
+      ["Mem available", host.mem_available_mb != null ? (host.mem_available_mb + " MiB") : null],
+      ["Mem total", host.mem_total_mb != null ? (host.mem_total_mb + " MiB") : null],
+    ]);
+  }
+
+  function paintRunStatus(local) {
+    const box = $("runStatusBox");
+    const run = (local && local.run) || {};
+    const active = local && local.service_active === "active";
+    const title = $("runStatusTitle");
+    const detail = $("runStatusDetail");
+    const tip = $("runStatusTip");
+    box.classList.remove("okbox", "warnbox");
+    if (active) {
+      box.classList.add("okbox");
+      const phaseBit = run.phase === "near_tip"
+        ? "near tip"
+        : (run.phase === "catching_up" ? "catching up to tip" : "running");
+      title.innerHTML = "<strong>Node start success</strong> · " + phaseBit;
+      detail.textContent = run.detail
+        || "Amaru is running; tip progress will appear shortly.";
+      tip.textContent = "Use Amaru observe below for tip, peers, and host load (from journald + /proc).";
+    } else if (local && local.service_active === "failed") {
+      box.classList.add("warnbox");
+      title.innerHTML = "<strong>Node failed</strong>";
+      detail.textContent = (run && run.detail) || "amaru.service is failed. Check journalctl -u amaru.";
+      tip.textContent = "";
+    } else {
+      box.classList.add("warnbox");
+      title.innerHTML = "<strong>Node stopped</strong>";
+      detail.textContent = (local && (local.bootstrap_done || local.db_present))
+        ? "Databases are ready. Press Start to run Amaru (expect high CPU while catching up to tip)."
+        : "Install + bootstrap first, then Start.";
+      tip.textContent = "";
+    }
+    paintObserve(local);
+  }
+
   function paintInstallStatus(local, job) {
     const parts = [];
     if (local && local.installed) {
@@ -879,6 +1121,7 @@ input[type=password], input[type=text] {
     else if (job && job.error) parts.push(`last error: ${job.error}`);
     $("installStatus").textContent = parts.join(" · ");
     paintBootstrapProgress(local, job);
+    paintRunStatus(local);
     const busy = !!(job && job.running);
     const bootUnit = local && (local.bootstrap_active === "activating" || local.bootstrap_active === "active");
     $("btnInstallAmaru").disabled = busy;
@@ -973,12 +1216,15 @@ input[type=password], input[type=text] {
       const bootBusy = job.running
         || local.bootstrap_active === "activating"
         || local.bootstrap_active === "active";
+      const runBusy = local.service_active === "active" || local.service_active === "activating";
       if (job.running) {
         $("nodeJobMsg").textContent = job.detail
           ? `Running ${job.op}: ${job.detail}`
           : `Running ${job.op}…`;
       } else if (job.error) {
         $("nodeJobMsg").textContent = `Error (${job.op || "job"}): ${job.error}`;
+      } else if (runBusy && local.run && local.run.detail) {
+        $("nodeJobMsg").textContent = local.run.detail;
       } else {
         $("nodeJobMsg").textContent = "";
       }
@@ -988,7 +1234,7 @@ input[type=password], input[type=text] {
           if (env.vars) paintEnv(env.vars);
         } catch (_) { /* env may be missing until install */ }
       }
-      if (bootBusy) {
+      if (bootBusy || runBusy) {
         if (!state.nodePoll) {
           state.nodePoll = setInterval(() => { loadNodes().catch(() => {}); }, 2500);
         }

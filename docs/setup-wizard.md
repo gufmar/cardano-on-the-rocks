@@ -13,8 +13,12 @@ Phone-driven configuration on the RockPi that served the Wi‑Fi (no mAP captive
 7. Web: **Nodes** (Amaru first)
     - **3.1 Install** — fetch aarch64 `.deb` via uplink, `apt install`, cache under `/var/cache/cot-r/amaru/`
     - **3.2 Bootstrap** — Mithril mainnet window into `/var/lib/amaru` (~10 GiB); or already pre-baked
-    - **3.3 Config** — edit `/etc/default/amaru`, Start/Stop/Restart, auto-start on boot, Wipe DB
+    - **3.3 Config** — edit `/etc/default/amaru`, Start/Stop/Restart, auto-start on boot, Wipe DB;
+      while running, **Amaru observe** panels (Overview / Sync / Peers / Host) from journals + `/proc`
     - **Copy snapshot to adopted** — master exports DBs; adopted peers install `.deb` from master cache and import
+
+After start success, observation stays inside the wizard HTTP UI; see
+[amaru-operator-ui.md](amaru-operator-ui.md).
 
 Use the top-right step menu to jump between Start, Internet uplink, Neighbour
 nodes, and Nodes (after confirm).

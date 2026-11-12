@@ -20,6 +20,8 @@ the original captive-portal stages. Stages 11–12 from the first briefing are
 | **A** | Wizard 3.1–3.3 Amaru | Install `.deb`, Mithril bootstrap, `/etc/default/amaru` editor |
 | **B** | LAN snapshot to adopted | Master exports DB; peers pull over LAN |
 | **C** | Auto-start switch | Per board; default off for venue demos |
+| **C2** | Post-start observe UI | Journal projection + Overview/Sync/Peers/Host in 3.3 |
+| **C3** | Observe depth | Richer peer rates / schema tracking as Amaru evolves |
 | **D** | Roles + LAN peers | relay / producer; fixed neighbour peering |
 | **E** | Relay WireGuard egress | Public IP:port behind NAT / hotel Wi‑Fi |
 | **F** | Producer secrets UI | Stake pool keys / wallets |

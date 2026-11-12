@@ -330,6 +330,284 @@ print(json.dumps(out))
 PY
 }
 
+# Bounded operator projection from amaru.service JSON journal traces + host samples.
+run_progress_json() {
+  local unit_state="$1"
+  python3 - "${AMARU_SERVICE}" "$unit_state" <<'PY'
+import json, os, subprocess, sys
+from collections import Counter
+
+unit, unit_state = sys.argv[1], sys.argv[2]
+
+
+def point_tuple(raw):
+    if not isinstance(raw, list) or not raw:
+        return None
+    slot = block = None
+    hh = None
+    try:
+        slot = int(raw[0])
+    except Exception:
+        pass
+    if len(raw) > 1 and isinstance(raw[1], str):
+        hh = raw[1]
+    if len(raw) > 2:
+        try:
+            block = int(raw[2])
+        except Exception:
+            pass
+    return {"slot": slot, "block_no": block, "header_hash": hh, "point": raw}
+
+
+def msg_name(fields):
+    m = fields.get("message")
+    if isinstance(m, dict):
+        return str(m.get("name") or "")
+    if m is None:
+        return ""
+    return str(m)
+
+
+def host_sample():
+    host = {
+        "load1": None,
+        "load5": None,
+        "load15": None,
+        "mem_total_mb": None,
+        "mem_available_mb": None,
+        "mem_used_pct": None,
+        "nproc": os.cpu_count(),
+    }
+    try:
+        with open("/proc/loadavg", "r", encoding="utf-8") as fh:
+            parts = fh.read().split()
+        host["load1"] = float(parts[0])
+        host["load5"] = float(parts[1])
+        host["load15"] = float(parts[2])
+    except Exception:
+        pass
+    try:
+        info = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if ":" not in line:
+                    continue
+                k, v = line.split(":", 1)
+                info[k.strip()] = v.strip()
+        total_kb = int(info.get("MemTotal", "0").split()[0])
+        avail_kb = int(info.get("MemAvailable", "0").split()[0])
+        host["mem_total_mb"] = round(total_kb / 1024.0, 1)
+        host["mem_available_mb"] = round(avail_kb / 1024.0, 1)
+        if total_kb > 0:
+            host["mem_used_pct"] = round(100.0 * (1.0 - (avail_kb / float(total_kb))), 1)
+    except Exception:
+        pass
+    return host
+
+
+out = {
+    "unit_state": unit_state,
+    "running": unit_state == "active",
+    "phase": "stopped",
+    "slot": None,
+    "block_no": None,
+    "header_hash": None,
+    "point": None,
+    "network_tip": None,
+    "gap_blocks": None,
+    "gap_slots": None,
+    "sync_pct": None,
+    "peers": [],
+    "event_counts": {},
+    "recent": [],
+    "host": host_sample(),
+    "detail": None,
+}
+if unit_state != "active":
+    if unit_state == "activating":
+        out["phase"] = "starting"
+        out["detail"] = "Amaru service is starting"
+    elif unit_state == "failed":
+        out["phase"] = "failed"
+        out["detail"] = "Amaru service failed"
+    else:
+        out["phase"] = "stopped"
+        out["detail"] = "Amaru is not running"
+    print(json.dumps(out))
+    raise SystemExit(0)
+
+try:
+    raw = subprocess.check_output(
+        ["journalctl", "-u", unit, "-n", "800", "-o", "cat", "--no-pager"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+except Exception:
+    raw = ""
+
+local = None
+net = None
+peer_hits = Counter()
+peer_last = {}
+event_counts = Counter()
+recent = []
+interesting = {
+    "tip.adopt",
+    "block.adopted",
+    "block.received",
+    "chainsync.roll_forward_done",
+    "header.announced",
+    "chain.tip_accepted",
+    "chain.best_tip_candidate",
+    "chain.resume_fetch",
+    "perf.header.lifecycle",
+}
+
+for line in raw.splitlines():
+    s = line.strip()
+    if not s.startswith("{"):
+        continue
+    try:
+        obj = json.loads(s)
+    except Exception:
+        continue
+    fields = obj.get("fields") or {}
+    name = msg_name(fields)
+    if name and name not in ("enter", "exit", "close"):
+        event_counts[name] += 1
+
+    peer = fields.get("peer")
+    if isinstance(peer, str) and peer:
+        peer_hits[peer] += 1
+        if name and name not in ("enter", "exit", "close"):
+            peer_last[peer] = name
+        elif peer not in peer_last:
+            peer_last[peer] = name or "seen"
+
+    for key in ("point", "current"):
+        pt = point_tuple(fields.get(key))
+        if pt and pt.get("slot") is not None:
+            local = pt
+    if fields.get("slot") is not None and fields.get("block_height") is not None:
+        try:
+            local = {
+                "slot": int(fields["slot"]),
+                "block_no": int(fields["block_height"]),
+                "header_hash": fields.get("header_hash")
+                if isinstance(fields.get("header_hash"), str)
+                else (local or {}).get("header_hash"),
+                "point": None,
+            }
+        except Exception:
+            pass
+    if fields.get("current_height") is not None and local:
+        try:
+            local["block_no"] = int(fields["current_height"])
+        except Exception:
+            pass
+
+    for key in ("tip", "highest"):
+        pt = point_tuple(fields.get(key))
+        if pt and pt.get("slot") is not None:
+            net = pt
+    if fields.get("tip_height") is not None and net:
+        try:
+            net["block_no"] = int(fields["tip_height"])
+        except Exception:
+            pass
+    if fields.get("max_block_height") is not None:
+        try:
+            mb = int(fields["max_block_height"])
+            if not net:
+                net = {
+                    "slot": None,
+                    "block_no": mb,
+                    "header_hash": None,
+                    "point": None,
+                }
+            else:
+                net["block_no"] = mb
+        except Exception:
+            pass
+
+    if name in interesting:
+        snap = {
+            "message": name,
+            "peer": peer if isinstance(peer, str) else None,
+            "outcome": fields.get("outcome"),
+            "header_hash": fields.get("header_hash")
+            if isinstance(fields.get("header_hash"), str)
+            else None,
+        }
+        if local:
+            snap["slot"] = local.get("slot")
+            snap["block_no"] = local.get("block_no")
+        recent.append(snap)
+
+if local:
+    out["slot"] = local.get("slot")
+    out["block_no"] = local.get("block_no")
+    out["header_hash"] = local.get("header_hash")
+    out["point"] = local.get("point")
+if net:
+    out["network_tip"] = {
+        "slot": net.get("slot"),
+        "block_no": net.get("block_no"),
+        "header_hash": net.get("header_hash"),
+    }
+
+gap_blocks = gap_slots = sync_pct = None
+if local and net:
+    if local.get("block_no") is not None and net.get("block_no") is not None:
+        gap_blocks = max(0, int(net["block_no"]) - int(local["block_no"]))
+        if net["block_no"] > 0:
+            sync_pct = round(
+                100.0 * min(1.0, float(local["block_no"]) / float(net["block_no"])), 3
+            )
+    if local.get("slot") is not None and net.get("slot") is not None:
+        gap_slots = max(0, int(net["slot"]) - int(local["slot"]))
+out["gap_blocks"] = gap_blocks
+out["gap_slots"] = gap_slots
+out["sync_pct"] = sync_pct
+
+out["peers"] = [
+    {"addr": addr, "events": int(n), "last_message": peer_last.get(addr)}
+    for addr, n in peer_hits.most_common(12)
+]
+out["event_counts"] = {k: int(v) for k, v in event_counts.most_common(20)}
+out["recent"] = recent[-8:]
+
+if local and local.get("slot") is not None:
+    near = False
+    if gap_blocks is not None and gap_blocks <= 50:
+        near = True
+    if gap_slots is not None and gap_slots <= 400:
+        near = True
+    out["phase"] = "near_tip" if near else "catching_up"
+    bits = [f"slot {local['slot']}"]
+    if local.get("block_no") is not None:
+        bits.append(f"block {local['block_no']}")
+    if gap_blocks is not None:
+        bits.append(f"{gap_blocks} blocks behind tip")
+    elif gap_slots is not None:
+        bits.append(f"{gap_slots} slots behind tip")
+    if near:
+        out["detail"] = (
+            "Node start success. Near network tip (" + ", ".join(bits) + ")."
+        )
+    else:
+        out["detail"] = (
+            "Node start success. Catching up from snapshot toward live tip ("
+            + ", ".join(bits)
+            + "). CPU stays high until near tip."
+        )
+else:
+    out["phase"] = "starting"
+    out["detail"] = "Node is running; waiting for first tip progress in journals…"
+print(json.dumps(out))
+PY
+}
+
 cmd_status() {
   ensure_conf
   local installed="false" ver="" active="" enabled="" boot_active="" boot_done auto_start impl
@@ -354,10 +632,12 @@ cmd_status() {
   local boot_done_json="false" auto_json="false"
   [[ "$boot_done" == "1" ]] && boot_done_json="true"
   [[ "$auto_start" == "1" ]] && auto_json="true"
-  local progress
+  local progress run
   progress="$(bootstrap_progress_json "$boot_active" 2>/dev/null || echo '{}')"
+  run="$(run_progress_json "$active" 2>/dev/null || echo '{}')"
   python3 -c 'import json,sys
 prog=json.loads(sys.argv[14] or "{}")
+run=json.loads(sys.argv[15] or "{}")
 print(json.dumps({
   "ok": True,
   "impl": sys.argv[1],
@@ -374,11 +654,12 @@ print(json.dumps({
   "home": sys.argv[12],
   "cache_dir": sys.argv[13],
   "progress": prog,
+  "run": run,
 }))' \
     "$impl" "$installed" "$ver" "$active" "$enabled" "$boot_active" \
     "$boot_done_json" "$has_db" "$auto_json" \
     "${AMARU_ENV_FILE}" "$env_exists" "${AMARU_HOME}" "${COT_R_CACHE}" \
-    "$progress"
+    "$progress" "$run"
 }
 
 resolve_version() {
