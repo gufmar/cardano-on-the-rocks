@@ -1031,6 +1031,79 @@ cmd_autostart() {
   cmd_status
 }
 
+# Relative names under AMARU_HOME for LAN DB copy (chain / ledger / snapshots).
+snapshot_entries() {
+  (cd "${AMARU_HOME}" && ls -d chain.*.db ledger.*.db snapshots 2>/dev/null || true)
+}
+
+cmd_snapshot_size() {
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  db_present || { echo '{"ok":false,"error":"no databases to export"}' >&2; exit 1; }
+  local entries entry bytes=0
+  mapfile -t entries < <(snapshot_entries)
+  if [[ ${#entries[@]} -eq 0 ]]; then
+    echo '{"ok":false,"error":"no snapshot entries"}' >&2
+    exit 1
+  fi
+  for entry in "${entries[@]}"; do
+    bytes=$((bytes + $(du -sb "${AMARU_HOME}/${entry}" 2>/dev/null | awk '{print $1}' || echo 0)))
+  done
+  python3 -c "import json,sys; print(json.dumps({'ok':True,'bytes':int(sys.argv[1]),'entries':sys.argv[2].split()}))" \
+    "$bytes" "${entries[*]}"
+}
+
+cmd_snapshot_cache_clear() {
+  mkdir -p "${COT_R_CACHE}"
+  local removed=0
+  local f
+  for f in \
+    "${COT_R_CACHE}/snapshot-mainnet.tgz" \
+    "${COT_R_CACHE}/from-master-snapshot.tgz" \
+    "${COT_R_CACHE}/"*.tgz \
+    "${COT_R_CACHE}/"*.tgz.partial \
+    "${COT_R_CACHE}/"*.partial
+  do
+    [[ -e "$f" ]] || continue
+    case "$f" in
+      *.deb) continue ;;
+    esac
+    rm -f "$f" && removed=$((removed + 1)) || true
+  done
+  python3 -c "import json,sys; print(json.dumps({'ok':True,'removed':int(sys.argv[1]),'cache':sys.argv[2]}))" \
+    "$removed" "${COT_R_CACHE}"
+}
+
+# Stream uncompressed tar of DB dirs to stdout. Errors as JSON on stderr.
+# No on-disk tarball (saves ~10 GiB and a long pack on 32 GiB eMMC).
+cmd_snapshot_stream_out() {
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  db_present || { echo '{"ok":false,"error":"no databases to export"}' >&2; exit 1; }
+  local entries
+  mapfile -t entries < <(snapshot_entries)
+  if [[ ${#entries[@]} -eq 0 ]]; then
+    echo '{"ok":false,"error":"no snapshot entries"}' >&2
+    exit 1
+  fi
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+  # Uncompressed: RocksDB barely shrinks with gzip and ARM CPU is the bottleneck.
+  tar -C "${AMARU_HOME}" -c --exclude='./lost+found' "${entries[@]}"
+}
+
+# Read uncompressed tar from stdin into AMARU_HOME (wipes prior chain/ledger/snapshots).
+cmd_snapshot_stream_in() {
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+  systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+  rm -rf "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db "${AMARU_HOME}/snapshots" 2>/dev/null || true
+  mkdir -p "${AMARU_HOME}"
+  tar -C "${AMARU_HOME}" -x
+  chown -R amaru:amaru "${AMARU_HOME}" 2>/dev/null || true
+  set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
+  set_conf_var COT_R_NODE_IMPL amaru
+  cmd_status
+}
+
+# Legacy on-disk gzip export (prefer stream-out for LAN push).
 cmd_snapshot_export() {
   local dest="${1:-}"
   [[ -n "$dest" ]] || { echo '{"ok":false,"error":"dest path required"}' >&2; exit 1; }
@@ -1042,10 +1115,11 @@ cmd_snapshot_export() {
   db_present || { echo '{"ok":false,"error":"no databases to export"}' >&2; exit 1; }
   systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
   mkdir -p "$(dirname "$dest")"
-  # Pack chain/ledger/snapshots under amaru home
+  local entries
+  mapfile -t entries < <(snapshot_entries)
   tar -C "${AMARU_HOME}" -czf "$dest" \
     --exclude='./lost+found' \
-    $(cd "${AMARU_HOME}" && ls -d chain.*.db ledger.*.db snapshots 2>/dev/null || true)
+    "${entries[@]}"
   chown root:cot-r "$dest" 2>/dev/null || true
   chmod 0640 "$dest" 2>/dev/null || true
   local bytes
@@ -1059,10 +1133,12 @@ cmd_snapshot_import() {
   package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
   systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
   systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
-  # Wipe existing DBs then unpack
   rm -rf "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db "${AMARU_HOME}/snapshots" 2>/dev/null || true
   mkdir -p "${AMARU_HOME}"
-  tar -C "${AMARU_HOME}" -xzf "$src"
+  case "$src" in
+    *.tar|*.tar.*) tar -C "${AMARU_HOME}" -xf "$src" ;;
+    *) tar -C "${AMARU_HOME}" -xzf "$src" ;;
+  esac
   chown -R amaru:amaru "${AMARU_HOME}" 2>/dev/null || true
   set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
   set_conf_var COT_R_NODE_IMPL amaru
@@ -1098,6 +1174,10 @@ Usage: cot-r-amaru-helper <command> [args]
   tune-catchup [restart=1]
   service-start|service-stop|service-restart
   enable-autostart|disable-autostart
+  snapshot-size
+  snapshot-cache-clear
+  snapshot-stream-out
+  snapshot-stream-in
   snapshot-export <path>
   snapshot-import <path>
   deb-path [version]
@@ -1122,6 +1202,10 @@ main() {
     service-restart) cmd_service restart ;;
     enable-autostart) cmd_autostart 1 ;;
     disable-autostart) cmd_autostart 0 ;;
+    snapshot-size) cmd_snapshot_size ;;
+    snapshot-cache-clear) cmd_snapshot_cache_clear ;;
+    snapshot-stream-out) cmd_snapshot_stream_out ;;
+    snapshot-stream-in) cmd_snapshot_stream_in ;;
     snapshot-export) cmd_snapshot_export "${1:-}" ;;
     snapshot-import) cmd_snapshot_import "${1:-}" ;;
     deb-path) cmd_deb_path "${1:-}" ;;

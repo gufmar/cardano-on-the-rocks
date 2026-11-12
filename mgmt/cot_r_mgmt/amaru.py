@@ -449,14 +449,109 @@ def set_autostart(enabled: bool) -> Dict[str, Any]:
     )
 
 
-def snapshot_export(dest: Optional[Path] = None) -> Dict[str, Any]:
+def snapshot_cache_clear() -> Dict[str, Any]:
+    """Drop on-disk snapshot tarballs under the Amaru cache (frees ~10 GiB)."""
+    return run_helper("snapshot-cache-clear", timeout=120.0)
+
+
+def snapshot_size() -> Dict[str, Any]:
+    """Bytes of chain/ledger/snapshots under AMARU_HOME (for disk checks / UI)."""
+    return run_helper("snapshot-size", timeout=60.0)
+
+
+def snapshot_export(
+    dest: Optional[Path] = None,
+    *,
+    reuse: bool = True,
+    min_reuse_bytes: int = 100 * 1024 * 1024,
+) -> Dict[str, Any]:
+    """Legacy gzip-to-disk export. Prefer stream helpers for LAN push."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     path = dest or (CACHE_DIR / "snapshot-mainnet.tgz")
+    if reuse and path.is_file():
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        if size >= min_reuse_bytes:
+            return {
+                "ok": True,
+                "path": str(path),
+                "bytes": size,
+                "reused": True,
+                "detail": f"reusing existing snapshot ({size} bytes)",
+            }
     return run_helper("snapshot-export", str(path), timeout=1800.0)
 
 
 def snapshot_import(src: Path) -> Dict[str, Any]:
     return run_helper("snapshot-import", str(src), timeout=1800.0)
+
+
+def _helper_cmd(*args: str) -> List[str]:
+    sudo = shutil.which("sudo") or "/usr/bin/sudo"
+    return [sudo, "-n", str(_helper_path()), *args]
+
+
+def open_snapshot_stream_out() -> subprocess.Popen:
+    """Stop Amaru and stream uncompressed tar of DB dirs on stdout."""
+    return subprocess.Popen(
+        _helper_cmd("snapshot-stream-out"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+def run_snapshot_stream_in(src) -> Dict[str, Any]:
+    """Pipe a readable binary stream into snapshot-stream-in (extract to AMARU_HOME)."""
+    proc = subprocess.Popen(
+        _helper_cmd("snapshot-stream-in"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdin is not None
+    try:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            proc.stdin.write(chunk)
+        proc.stdin.close()
+    except Exception as e:  # noqa: BLE001
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return {"ok": False, "error": f"stream write failed: {e}"}
+    out_b, err_b = proc.communicate(timeout=7200)
+    out = (out_b or b"").decode("utf-8", errors="replace").strip()
+    err = (err_b or b"").decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        for blob in (out, err):
+            if blob.startswith("{"):
+                try:
+                    parsed = json.loads(blob)
+                    if isinstance(parsed, dict):
+                        parsed.setdefault("ok", False)
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+        return {
+            "ok": False,
+            "error": err or out or f"snapshot-stream-in exit {proc.returncode}",
+            "exit_code": proc.returncode,
+        }
+    if not out:
+        return {"ok": True}
+    try:
+        data = json.loads(out)
+        if isinstance(data, dict):
+            return data
+        return {"ok": True, "data": data}
+    except json.JSONDecodeError:
+        return {"ok": True, "raw": out}
 
 
 def deb_path(version: Optional[str] = None) -> Dict[str, Any]:
@@ -515,44 +610,80 @@ def push_snapshot_to_peers(
     peer_token: Optional[str],
     addrs: List[str],
 ) -> Dict[str, Any]:
-    """Export local snapshot and POST multipart-ish via HTTP JSON path: peer pulls from us."""
+    """Stream local Amaru DB folders to peers over LAN (no on-disk tarball)."""
     if not peer_token:
         return {"ok": False, "error": "peer token missing"}
-    # Ensure export exists
-    export = snapshot_export()
-    if not export.get("ok"):
-        return export
-    path = Path(str(export.get("path") or ""))
-    if not path.is_file():
-        return {"ok": False, "error": "export missing"}
+
+    _set_job_progress({"phase": "cache_clear"}, "clearing old snapshot tarballs…")
+    cleared = snapshot_cache_clear()
+    if not cleared.get("ok"):
+        log.warning("snapshot cache clear: %s", cleared.get("error") or cleared)
+
+    _set_job_progress({"phase": "size"}, "measuring local Amaru DB size…")
+    size_info = snapshot_size()
+    if not size_info.get("ok"):
+        return {
+            "ok": False,
+            "error": size_info.get("error") or "snapshot size failed",
+            "size": size_info,
+        }
+    size = int(size_info.get("bytes") or 0)
+    if size <= 0:
+        return {"ok": False, "error": "local DB size is zero", "size": size_info}
+
     local_ip = peers.local_mgmt_ipv4()
+    if not local_ip:
+        return {"ok": False, "error": "local management IP unknown", "size": size_info}
+
+    _set_job_progress(
+        {"phase": "ready", "bytes": size},
+        f"streaming ~{size // (1024 * 1024)} MiB DB folders to peers (Amaru stops while serving)…",
+    )
+
     results = []
-    for addr in addrs:
-        # Peer installs package if needed, then pulls bundle from master
-        install_resp = peers.http_json(
-            "POST",
-            peers.peer_url(addr, "/api/v1/peer/node/install"),
-            body={"from_master": local_ip},
-            token=peer_token,
-            timeout=1800.0,
-        )
-        pull = peers.http_json(
-            "POST",
-            peers.peer_url(addr, "/api/v1/peer/node/snapshot/pull"),
-            body={
-                "master": local_ip,
-                "url_path": "/api/v1/peer/node/snapshot/bundle",
-            },
-            token=peer_token,
-            timeout=3600.0,
-        )
-        results.append(
-            {
-                "addr": addr,
-                "install": install_resp,
-                "pull": pull,
-            }
-        )
+    try:
+        for addr in addrs:
+            _set_job_progress(
+                {"phase": "peer_install", "addr": addr, "bytes": size},
+                f"{addr}: ensure Amaru package…",
+            )
+            install_resp = peers.http_json(
+                "POST",
+                peers.peer_url(addr, "/api/v1/peer/node/install"),
+                body={"from_master": local_ip},
+                token=peer_token,
+                timeout=1800.0,
+            )
+            _set_job_progress(
+                {"phase": "peer_pull", "addr": addr, "bytes": size},
+                f"{addr}: streaming ~{size // (1024 * 1024)} MiB over LAN…",
+            )
+            pull = peers.http_json(
+                "POST",
+                peers.peer_url(addr, "/api/v1/peer/node/snapshot/pull"),
+                body={
+                    "master": local_ip,
+                    "url_path": "/api/v1/peer/node/snapshot/stream",
+                    "mode": "stream",
+                    "expect_bytes": size,
+                },
+                token=peer_token,
+                timeout=7200.0,
+            )
+            results.append(
+                {
+                    "addr": addr,
+                    "install": install_resp,
+                    "pull": pull,
+                }
+            )
+    finally:
+        # stream-out stops Amaru; restore so this board can keep catching tip.
+        try:
+            service("start")
+        except Exception:  # noqa: BLE001
+            log.exception("failed to restart amaru after snapshot stream")
+
     def _peer_ok(r: Dict[str, Any]) -> bool:
         inst = r.get("install") or {}
         pull = r.get("pull") or {}
@@ -560,4 +691,21 @@ def push_snapshot_to_peers(
         return install_ok and bool(pull.get("ok"))
 
     ok = all(_peer_ok(r) for r in results) if results else False
-    return {"ok": ok, "export": export, "peers": results}
+    errors = []
+    for r in results:
+        addr = r.get("addr")
+        pull = r.get("pull") or {}
+        inst = r.get("install") or {}
+        if not (inst.get("ok") or inst.get("skipped") or inst.get("installed")):
+            errors.append(f"{addr} install: {inst.get('error') or 'failed'}")
+        if not pull.get("ok"):
+            errors.append(f"{addr} pull: {pull.get('error') or 'failed'}")
+    err = "; ".join(errors) if errors else None
+    return {
+        "ok": ok,
+        "size": size_info,
+        "cache_clear": cleared,
+        "peers": results,
+        "error": err,
+        "detail": "done" if ok else (err or "push-snapshot failed"),
+    }

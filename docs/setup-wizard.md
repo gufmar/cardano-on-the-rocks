@@ -15,7 +15,10 @@ Phone-driven configuration on the RockPi that served the Wi‑Fi (no mAP captive
     - **3.1 Install** — local: fetch/install `.deb` on this controller only; peer: LAN-install from master cache
     - **3.2 Bootstrap** — Mithril on **this board only** (~10 GiB); peers should **Copy DB** instead
     - **3.3 Config** — Start/Stop/Wipe for selected board; env editor + observe stay local-only
-    - **Copy DB** — with peer selected: that peer only; with This board: all adopted peers
+    - **Copy DB** — with peer selected: that peer only; with This board: all adopted peers.
+      Streams stopped Amaru DB folders over LAN (no on-disk tarball). Peer needs roughly
+      **1.15× DB size** free under `/var/lib/amaru`. Old `*.tgz` cache files are cleared
+      on push. UI shows job phases (size / install / stream).
 
 After start success, observation stays inside the wizard HTTP UI; see
 [amaru-operator-ui.md](amaru-operator-ui.md).

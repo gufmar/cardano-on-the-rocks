@@ -185,12 +185,79 @@ def _file_response(
             "Content-Disposition", f'attachment; filename="{download_name}"'
         )
     handler.end_headers()
-    with path.open("rb") as fh:
+    try:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        # Peer aborted a large snapshot/deb download; not a server bug.
+        return
+
+
+def _snapshot_stream_response(handler: BaseHTTPRequestHandler) -> None:
+    """Stream live Amaru DB folders as uncompressed tar (no on-disk archive)."""
+    size_info = amarumod.snapshot_size()
+    if not size_info.get("ok"):
+        _json_response(handler, 409, size_info)
+        return
+    expect = int(size_info.get("bytes") or 0)
+    try:
+        proc = amarumod.open_snapshot_stream_out()
+    except OSError as e:
+        _json_response(handler, 500, {"ok": False, "error": str(e)})
+        return
+    assert proc.stdout is not None
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/x-tar")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("X-Cot-R-Snapshot-Mode", "stream")
+    if expect > 0:
+        handler.send_header("X-Cot-R-Expect-Bytes", str(expect))
+    handler.send_header(
+        "Content-Disposition", 'attachment; filename="amaru-db-stream.tar"'
+    )
+    # Chunked/EOF framing: size is approximate (tar headers add a little).
+    handler.end_headers()
+    err_tail = b""
+    try:
         while True:
-            chunk = fh.read(1024 * 1024)
+            chunk = proc.stdout.read(1024 * 1024)
             if not chunk:
                 break
             handler.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return
+    finally:
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+        try:
+            if proc.stderr is not None:
+                err_tail = proc.stderr.read() or b""
+                proc.stderr.close()
+        except OSError:
+            err_tail = b""
+        try:
+            proc.wait(timeout=30)
+        except Exception:  # noqa: BLE001
+            try:
+                proc.kill()
+            except OSError:
+                pass
+    if proc.returncode not in (0, None):
+        log.warning(
+            "snapshot-stream-out exit %s: %s",
+            proc.returncode,
+            err_tail.decode("utf-8", errors="replace")[:500],
+        )
 
 
 def _setup_page_html() -> str:
@@ -578,21 +645,14 @@ class Handler(BaseHTTPRequestHandler):
             st["job"] = amarumod.job_snapshot()
             _json_response(self, 200, st)
             return
-        if path == "/api/v1/peer/node/snapshot/bundle":
+        if path in (
+            "/api/v1/peer/node/snapshot/stream",
+            "/api/v1/peer/node/snapshot/bundle",
+        ):
             if not self._require_peer_auth():
                 return
-            # Ensure export exists (sync, may take a while on first call)
-            export = amarumod.snapshot_export()
-            if not export.get("ok"):
-                _json_response(self, 409, export)
-                return
-            path_file = Path(str(export.get("path") or ""))
-            _file_response(
-                self,
-                path_file,
-                content_type="application/gzip",
-                download_name=path_file.name,
-            )
+            # bundle kept as alias; both stream live folders (no on-disk tarball).
+            _snapshot_stream_response(self)
             return
         if path == "/api/v1/peer/node/deb":
             if not self._require_peer_auth():
@@ -1119,20 +1179,75 @@ class Handler(BaseHTTPRequestHandler):
                 _json_response(self, 400, {"ok": False, "error": err})
                 return
             master = str((body or {}).get("master") or "")
-            url_path = str((body or {}).get("url_path") or "/api/v1/peer/node/snapshot/bundle")
+            url_path = str(
+                (body or {}).get("url_path") or "/api/v1/peer/node/snapshot/stream"
+            )
             if not master:
                 _json_response(self, 400, {"ok": False, "error": "master required"})
                 return
             url = peersmod.peer_url(master, url_path)
-            cache = Path(os.environ.get("COT_R_AMARU_CACHE", "/var/cache/cot-r/amaru"))
-            cache.mkdir(parents=True, exist_ok=True)
-            dest = cache / "from-master-snapshot.tgz"
+            # Drop leftover tarballs from the old push path.
+            amarumod.snapshot_cache_clear()
+            expect = (body or {}).get("expect_bytes")
             try:
-                _http_download(url, dest, token=CTX.peer_token, timeout=3600)
+                expect_n = int(expect) if expect is not None else 0
+            except (TypeError, ValueError):
+                expect_n = 0
+            if expect_n > 0:
+                import shutil
+
+                home = Path("/var/lib/amaru")
+                try:
+                    free = shutil.disk_usage(str(home if home.exists() else "/")).free
+                except OSError:
+                    free = shutil.disk_usage("/").free
+                # stream-in wipes local DBs first; count that reclaimable space.
+                reclaim = 0
+                try:
+                    local_sz = amarumod.snapshot_size()
+                    if local_sz.get("ok"):
+                        reclaim = int(local_sz.get("bytes") or 0)
+                except Exception:  # noqa: BLE001
+                    reclaim = 0
+                effective = free + reclaim
+                need = int(expect_n * 1.15)
+                if effective < need:
+                    _json_response(
+                        self,
+                        507,
+                        {
+                            "ok": False,
+                            "error": (
+                                f"not enough free disk on peer: have {free // (1024 * 1024)} MiB free"
+                                + (
+                                    f" (+{reclaim // (1024 * 1024)} MiB reclaimable)"
+                                    if reclaim
+                                    else ""
+                                )
+                                + f", need ~{need // (1024 * 1024)} MiB for "
+                                f"{expect_n // (1024 * 1024)} MiB streamed DB"
+                            ),
+                            "free_bytes": free,
+                            "reclaim_bytes": reclaim,
+                            "need_bytes": need,
+                            "expect_bytes": expect_n,
+                        },
+                    )
+                    return
+            import urllib.request
+
+            headers = {"User-Agent": "cot-r-mgmt-peer/1"}
+            if CTX.peer_token:
+                headers["Authorization"] = f"Bearer {CTX.peer_token}"
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=7200) as resp:
+                    result = amarumod.run_snapshot_stream_in(resp)
             except Exception as e:  # noqa: BLE001
-                _json_response(self, 502, {"ok": False, "error": f"snapshot pull failed: {e}"})
+                _json_response(
+                    self, 502, {"ok": False, "error": f"snapshot stream pull failed: {e}"}
+                )
                 return
-            result = amarumod.snapshot_import(dest)
             _json_response(self, 200 if result.get("ok") else 500, result)
             return
         if path == "/api/v1/peer/node/service":

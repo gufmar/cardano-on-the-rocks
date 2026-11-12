@@ -23,7 +23,9 @@ ExecStart=/usr/bin/python3 /opt/cot-r/mgmt/cot_r_mgmt/server.py
 Restart=on-failure
 RestartSec=3
 Nice=5
-MemoryMax=96M
+# Snapshot/deb LAN copies stream through this process; 96M was too tight and
+# contributed to peer connection resets on multi‑GiB transfers.
+MemoryMax=384M
 TasksMax=64
 # /run/cot-r comes from cot-r-display RuntimeDirectory when that unit is up.
 SupplementaryGroups=i2c
