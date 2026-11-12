@@ -56,6 +56,7 @@ Amaru upstream guide: https://amaru.global/user-guide/mainnet/
 | GET | `/api/v1/wizard/node/status` | session |
 | POST | `/api/v1/wizard/node/install` | session |
 | POST | `/api/v1/wizard/node/bootstrap` | session |
+| POST | `/api/v1/wizard/node/bootstrap/stop` | session (stop Mithril / oneshot) |
 | GET/PUT | `/api/v1/wizard/node/env` | session |
 | POST | `/api/v1/wizard/node/service` | session `{action}` |
 | POST | `/api/v1/wizard/node/autostart` | session `{enabled}` |

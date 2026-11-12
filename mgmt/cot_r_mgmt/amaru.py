@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,8 @@ log = logging.getLogger("cot_r_mgmt.amaru")
 HELPER = Path(os.environ.get("COT_R_AMARU_HELPER", "/opt/cot-r/bin/cot-r-amaru-helper"))
 RUN_DIR = Path(os.environ.get("COT_R_RUN_DIR", "/run/cot-r"))
 CACHE_DIR = Path(os.environ.get("COT_R_AMARU_CACHE", "/var/cache/cot-r/amaru"))
+BOOTSTRAP_POLL_SECONDS = float(os.environ.get("COT_R_AMARU_BOOTSTRAP_POLL", "3.0"))
+BOOTSTRAP_MAX_SECONDS = float(os.environ.get("COT_R_AMARU_BOOTSTRAP_MAX", str(6 * 3600)))
 
 CATALOG = [
     {
@@ -52,11 +55,14 @@ CATALOG = [
 ]
 
 _lock = threading.RLock()
+_cancel = threading.Event()
 _job: Dict[str, Any] = {
     "running": False,
     "op": None,
     "error": None,
     "result": None,
+    "progress": None,
+    "detail": None,
 }
 
 
@@ -115,11 +121,29 @@ def status() -> Dict[str, Any]:
     return run_helper("status", timeout=30.0)
 
 
+def _set_job_progress(progress: Optional[Dict[str, Any]], detail: Optional[str] = None) -> None:
+    with _lock:
+        if progress is not None:
+            _job["progress"] = progress
+        if detail is not None:
+            _job["detail"] = detail
+
+
 def _run_job(op: str, fn) -> Dict[str, Any]:
     with _lock:
         if _job.get("running"):
             return {"ok": False, "error": "another Amaru job is running", "job": job_snapshot()}
-        _job.update({"running": True, "op": op, "error": None, "result": None})
+        _cancel.clear()
+        _job.update(
+            {
+                "running": True,
+                "op": op,
+                "error": None,
+                "result": None,
+                "progress": None,
+                "detail": f"starting {op}",
+            }
+        )
 
     def _worker() -> None:
         try:
@@ -127,11 +151,17 @@ def _run_job(op: str, fn) -> Dict[str, Any]:
             with _lock:
                 _job["result"] = result
                 if not result.get("ok"):
-                    _job["error"] = result.get("error")
+                    _job["error"] = result.get("error") or result.get("detail") or "failed"
+                    _job["detail"] = _job["error"]
+                else:
+                    _job["detail"] = result.get("detail") or "done"
+                    if result.get("progress") is not None:
+                        _job["progress"] = result.get("progress")
         except Exception as e:  # noqa: BLE001
             log.exception("amaru job %s failed", op)
             with _lock:
                 _job["error"] = str(e)
+                _job["detail"] = str(e)
                 _job["result"] = {"ok": False, "error": str(e)}
         finally:
             with _lock:
@@ -162,13 +192,133 @@ def install_file(path: Path, *, background: bool = True) -> Dict[str, Any]:
     return _do()
 
 
-def bootstrap(*, background: bool = True) -> Dict[str, Any]:
-    def _do() -> Dict[str, Any]:
-        return run_helper("bootstrap", timeout=7200.0)
+def _bootstrap_monitor() -> Dict[str, Any]:
+    """Start oneshot bootstrap (non-blocking) and poll until done or failed."""
+    started = run_helper("bootstrap", timeout=60.0)
+    if not started.get("ok"):
+        err = started.get("error") or "failed to start bootstrap"
+        prog = started.get("progress")
+        return {"ok": False, "error": err, "progress": prog, "detail": err}
 
+    deadline = time.time() + BOOTSTRAP_MAX_SECONDS
+    last_prog: Optional[Dict[str, Any]] = started.get("progress")
+    _set_job_progress(last_prog, "bootstrap started")
+
+    while time.time() < deadline:
+        if _cancel.is_set():
+            return {
+                "ok": False,
+                "error": "bootstrap cancelled",
+                "progress": last_prog,
+                "detail": "bootstrap cancelled",
+                "cancelled": True,
+            }
+        st = status()
+        if not st.get("ok"):
+            time.sleep(BOOTSTRAP_POLL_SECONDS)
+            continue
+        prog = st.get("progress") if isinstance(st.get("progress"), dict) else {}
+        last_prog = prog
+        unit = str(st.get("bootstrap_active") or prog.get("unit_state") or "")
+        detail_parts = []
+        dl = prog.get("downloaded_bytes")
+        delta = prog.get("delta_bytes")
+        if dl is not None:
+            detail_parts.append(f"downloaded {_fmt_mib(dl)}")
+        if delta is not None:
+            detail_parts.append(f"disk +{_fmt_mib(delta)}")
+        snaps = prog.get("completed_snapshots")
+        if snaps is not None:
+            detail_parts.append(f"snapshots {snaps}")
+        detail_parts.append(f"unit {unit or '?'}")
+        detail = " · ".join(detail_parts)
+        _set_job_progress(prog, detail)
+
+        if st.get("bootstrap_done") or st.get("db_present") or prog.get("complete"):
+            return {
+                "ok": True,
+                "detail": "bootstrap complete",
+                "progress": prog,
+                **{k: st.get(k) for k in ("installed", "version", "bootstrap_done", "db_present")},
+            }
+
+        if prog.get("failed") or unit == "failed":
+            err = (
+                prog.get("error")
+                or "amaru-bootstrap.service failed"
+            )
+            # Never use systemd accounting footers as the error reason.
+            last = str(prog.get("last_log") or "")
+            if err and "Consumed" in str(err):
+                err = "amaru-bootstrap.service failed"
+            if last and "Consumed" not in last and "Deactivated successfully" not in last:
+                err = f"{err}: {last}" if err else last
+            return {"ok": False, "error": err, "progress": prog, "detail": err}
+
+        # Unit finished: success if Amaru logged complete / DBs present / systemd success
+        if unit in ("inactive", "dead"):
+            time.sleep(2.0)
+            if _cancel.is_set():
+                return {
+                    "ok": False,
+                    "error": "bootstrap cancelled",
+                    "progress": last_prog,
+                    "detail": "bootstrap cancelled",
+                    "cancelled": True,
+                }
+            st2 = status()
+            prog2 = st2.get("progress") if isinstance(st2.get("progress"), dict) else prog
+            if (
+                st2.get("db_present")
+                or st2.get("bootstrap_done")
+                or (prog2 or {}).get("complete")
+                or (prog2 or {}).get("systemd_result") == "success"
+            ):
+                return {"ok": True, "detail": "bootstrap complete", "progress": prog2}
+            unit2 = str(st2.get("bootstrap_active") or "")
+            if unit2 in ("active", "activating"):
+                time.sleep(BOOTSTRAP_POLL_SECONDS)
+                continue
+            err = (prog2 or {}).get("error") or "bootstrap stopped without creating databases"
+            if isinstance(err, str) and "Consumed" in err:
+                err = "bootstrap stopped without creating databases"
+            return {"ok": False, "error": err, "progress": prog2, "detail": err}
+
+        time.sleep(BOOTSTRAP_POLL_SECONDS)
+
+    err = "bootstrap timed out"
+    return {"ok": False, "error": err, "progress": last_prog, "detail": err}
+
+
+def _fmt_mib(num: Any) -> str:
+    try:
+        n = float(num)
+    except (TypeError, ValueError):
+        return "?"
+    return f"{n / (1024 * 1024):.1f} MiB"
+
+
+def bootstrap(*, background: bool = True) -> Dict[str, Any]:
     if background:
-        return _run_job("bootstrap", _do)
-    return _do()
+        return _run_job("bootstrap", _bootstrap_monitor)
+    return _bootstrap_monitor()
+
+
+def bootstrap_stop() -> Dict[str, Any]:
+    """Stop amaru-bootstrap / Mithril download; cancel in-process job monitor."""
+    _cancel.set()
+    with _lock:
+        if _job.get("running") and _job.get("op") == "bootstrap":
+            _job["detail"] = "stopping bootstrap…"
+    result = run_helper("bootstrap-stop", timeout=60.0)
+    with _lock:
+        if _job.get("running") and _job.get("op") == "bootstrap":
+            _job["error"] = "bootstrap cancelled"
+            _job["detail"] = "bootstrap cancelled"
+            _job["result"] = {"ok": False, "error": "bootstrap cancelled", "cancelled": True}
+            _job["running"] = False
+    result.setdefault("job", job_snapshot())
+    return result
 
 
 def push_snapshot_job(peer_token: Optional[str], addrs: List[str]) -> Dict[str, Any]:
@@ -250,6 +400,8 @@ def job_snapshot() -> Dict[str, Any]:
             "running": bool(_job.get("running")),
             "op": _job.get("op"),
             "error": _job.get("error"),
+            "detail": _job.get("detail"),
+            "progress": _job.get("progress"),
             "result": _job.get("result"),
         }
 

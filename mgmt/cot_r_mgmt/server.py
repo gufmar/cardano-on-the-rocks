@@ -219,6 +219,19 @@ def _read_json(handler: BaseHTTPRequestHandler, limit: int = 64 * 1024) -> Tuple
     return data, None
 
 
+def _drain_body(handler: BaseHTTPRequestHandler, limit: int = 64 * 1024) -> None:
+    """Consume request body so keep-alive does not prepend leftovers to the next request."""
+    length = int(handler.headers.get("Content-Length") or "0")
+    if length <= 0:
+        return
+    to_read = min(length, limit)
+    while to_read > 0:
+        chunk = handler.rfile.read(min(65536, to_read))
+        if not chunk:
+            break
+        to_read -= len(chunk)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -230,17 +243,23 @@ class Handler(BaseHTTPRequestHandler):
         provided = authmod.extract_bearer(self.headers.get("Authorization"))
         if authmod.token_ok(provided, CTX.token):
             return True
+        if self.command in ("POST", "PUT", "PATCH"):
+            _drain_body(self)
         _json_response(self, 401, {"ok": False, "error": "unauthorized"})
         return False
 
     def _require_peer_auth(self) -> bool:
         assert CTX is not None
         if not CTX.peer_token:
+            if self.command in ("POST", "PUT", "PATCH"):
+                _drain_body(self)
             _json_response(self, 503, {"ok": False, "error": "peer token not configured"})
             return False
         provided = authmod.extract_bearer(self.headers.get("Authorization"))
         if authmod.token_ok(provided, CTX.peer_token):
             return True
+        if self.command in ("POST", "PUT", "PATCH"):
+            _drain_body(self)
         _json_response(self, 401, {"ok": False, "error": "unauthorized"})
         return False
 
@@ -249,6 +268,8 @@ class Handler(BaseHTTPRequestHandler):
         sid = self.headers.get("X-Setup-Session")
         if CTX.wizard.session_ok(sid):
             return True
+        if self.command in ("POST", "PUT", "PATCH"):
+            _drain_body(self)
         _json_response(self, 401, {"ok": False, "error": "setup session required"})
         return False
 
@@ -928,12 +949,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/wizard/node/bootstrap":
             if not self._require_wizard_session():
                 return
+            # Drain optional JSON body (UI may send "{}") so keep-alive stays clean.
+            _read_json(self)
             result = amarumod.bootstrap()
             _json_response(self, 200 if result.get("ok") else 409, result)
+            return
+        if path == "/api/v1/wizard/node/bootstrap/stop":
+            if not self._require_wizard_session():
+                return
+            _read_json(self)
+            result = amarumod.bootstrap_stop()
+            _json_response(self, 200 if result.get("ok") else 500, result)
             return
         if path == "/api/v1/wizard/node/wipe":
             if not self._require_wizard_session():
                 return
+            _read_json(self)
             result = amarumod.wipe()
             _json_response(self, 200 if result.get("ok") else 500, result)
             return
@@ -1057,6 +1088,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/peer/node/wipe":
             if not self._require_peer_auth():
                 return
+            _read_json(self)
             result = amarumod.wipe()
             _json_response(self, 200 if result.get("ok") else 500, result)
             return

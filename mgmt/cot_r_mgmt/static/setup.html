@@ -342,8 +342,11 @@ input[type=password], input[type=text] {
 
     <div id="sub-bootstrap" class="hidden">
       <p id="bootstrapStatus">Mithril bootstrap downloads a mainnet ledger window into <code>/var/lib/amaru</code>.</p>
+      <p class="meta" id="bootstrapProgress">—</p>
+      <div id="bootstrapErr" class="warnbox hidden"></div>
       <div class="row">
         <button id="btnBootstrap" type="button">Bootstrap (Mithril)</button>
+        <button id="btnBootstrapStop" type="button" class="warn">Stop bootstrap</button>
         <button id="btnWipeDb" type="button" class="warn">Wipe DB</button>
       </div>
       <p class="meta">Wipe is required before a fresh bootstrap if databases already exist. Demo reset does not wipe Amaru DBs.</p>
@@ -815,6 +818,56 @@ input[type=password], input[type=text] {
     });
   }
 
+  function fmtMiB(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return "?";
+    return (v / (1024 * 1024)).toFixed(1) + " MiB";
+  }
+
+  function paintBootstrapProgress(local, job) {
+    const prog = (job && job.progress) || (local && local.progress) || {};
+    const unit = (local && local.bootstrap_active) || prog.unit_state || "";
+    const runningBoot = !!(job && job.running && job.op === "bootstrap")
+      || unit === "activating" || unit === "active";
+    const bits = [];
+    if (prog.downloaded_bytes != null) bits.push("downloaded " + fmtMiB(prog.downloaded_bytes));
+    if (prog.delta_bytes != null) bits.push("disk +" + fmtMiB(prog.delta_bytes) + " since start");
+    if (prog.completed_snapshots != null) bits.push("snapshots " + prog.completed_snapshots);
+    if (unit) bits.push("unit " + unit);
+    $("bootstrapProgress").textContent = bits.length
+      ? bits.join(" · ")
+      : (runningBoot ? "Waiting for first progress sample…" : "—");
+
+    const errBox = $("bootstrapErr");
+    const looksDone = !!(local && (local.bootstrap_done || local.db_present || (prog && prog.complete)));
+    let errText = "";
+    if (!looksDone) {
+      errText = (job && job.error) || (prog.failed && (prog.error || "")) || "";
+      if (errText && /Consumed |Deactivated successfully/i.test(errText)) {
+        errText = "Bootstrap ended without a usable database. Check journalctl -u amaru-bootstrap, then wipe and retry if needed.";
+      }
+    }
+    if (errText) {
+      errBox.textContent = errText;
+      errBox.classList.remove("hidden");
+    } else {
+      errBox.textContent = "";
+      errBox.classList.add("hidden");
+    }
+
+    if (looksDone) {
+      const epoch = prog && prog.epoch != null ? ` (epoch ${prog.epoch})` : "";
+      $("bootstrapStatus").textContent = `Bootstrap complete${epoch}. Node is ready to start in 3.3 (or wipe to re-bootstrap).`;
+    } else if (runningBoot) {
+      $("bootstrapStatus").textContent = (job && job.detail)
+        || "Bootstrap running (Mithril download)…";
+    } else if (job && job.error) {
+      $("bootstrapStatus").textContent = "Bootstrap failed. See reason below, then wipe if needed and retry.";
+    } else {
+      $("bootstrapStatus").textContent = "No databases yet. Bootstrap via Mithril over the mAP uplink (~10 GiB mainnet window).";
+    }
+  }
+
   function paintInstallStatus(local, job) {
     const parts = [];
     if (local && local.installed) {
@@ -825,11 +878,13 @@ input[type=password], input[type=text] {
     if (job && job.running) parts.push(`job: ${job.op}…`);
     else if (job && job.error) parts.push(`last error: ${job.error}`);
     $("installStatus").textContent = parts.join(" · ");
-    $("bootstrapStatus").textContent = (local && (local.bootstrap_done || local.db_present))
-      ? "Databases present. Node is ready to start (or wipe to re-bootstrap)."
-      : "No databases yet. Bootstrap via Mithril over the mAP uplink (~10 GiB mainnet window).";
-    $("btnInstallAmaru").disabled = !!(job && job.running);
-    $("btnBootstrap").disabled = !!(job && job.running) || !(local && local.installed);
+    paintBootstrapProgress(local, job);
+    const busy = !!(job && job.running);
+    const bootUnit = local && (local.bootstrap_active === "activating" || local.bootstrap_active === "active");
+    $("btnInstallAmaru").disabled = busy;
+    $("btnBootstrap").disabled = busy || bootUnit || !(local && local.installed)
+      || !!(local && (local.bootstrap_done || local.db_present));
+    $("btnBootstrapStop").disabled = !(busy && job && job.op === "bootstrap") && !bootUnit;
     $("btnPushSnapshot").disabled = !(local && (local.bootstrap_done || local.db_present));
     const auto = !!(local && local.auto_start);
     $("btnAutoStart").textContent = auto ? "On" : "Off";
@@ -913,18 +968,29 @@ input[type=password], input[type=text] {
       paintCatalog(data.catalog);
       paintCluster(data);
       paintInstallStatus(data.local || {}, data.job || {});
-      $("nodeJobMsg").textContent = (data.job && data.job.running)
-        ? `Running ${data.job.op}…`
-        : "";
+      const job = data.job || {};
+      const local = data.local || {};
+      const bootBusy = job.running
+        || local.bootstrap_active === "activating"
+        || local.bootstrap_active === "active";
+      if (job.running) {
+        $("nodeJobMsg").textContent = job.detail
+          ? `Running ${job.op}: ${job.detail}`
+          : `Running ${job.op}…`;
+      } else if (job.error) {
+        $("nodeJobMsg").textContent = `Error (${job.op || "job"}): ${job.error}`;
+      } else {
+        $("nodeJobMsg").textContent = "";
+      }
       if (state.nodeSub === "config" || (data.local && data.local.env_exists)) {
         try {
           const env = await api("/api/v1/wizard/node/env");
           if (env.vars) paintEnv(env.vars);
         } catch (_) { /* env may be missing until install */ }
       }
-      if (data.job && data.job.running) {
+      if (bootBusy) {
         if (!state.nodePoll) {
-          state.nodePoll = setInterval(() => { loadNodes().catch(() => {}); }, 3000);
+          state.nodePoll = setInterval(() => { loadNodes().catch(() => {}); }, 2500);
         }
       } else if (state.nodePoll) {
         clearInterval(state.nodePoll);
@@ -944,11 +1010,29 @@ input[type=password], input[type=text] {
   };
   $("btnBootstrap").onclick = async () => {
     err("");
+    $("bootstrapErr").classList.add("hidden");
     try {
       await api("/api/v1/wizard/node/bootstrap", { method: "POST", body: "{}" });
       setNodeSub("bootstrap");
       await loadNodes();
-    } catch (e) { err(e.message); }
+    } catch (e) {
+      err(e.message);
+      $("bootstrapErr").textContent = e.message;
+      $("bootstrapErr").classList.remove("hidden");
+      setNodeSub("bootstrap");
+    }
+  };
+  $("btnBootstrapStop").onclick = async () => {
+    err("");
+    try {
+      await api("/api/v1/wizard/node/bootstrap/stop", { method: "POST", body: "{}" });
+      setNodeSub("bootstrap");
+      await loadNodes();
+    } catch (e) {
+      err(e.message);
+      $("bootstrapErr").textContent = e.message;
+      $("bootstrapErr").classList.remove("hidden");
+    }
   };
   $("btnWipeDb").onclick = async () => {
     if (!confirm("Wipe Amaru databases on this board? You will need to bootstrap again.")) return;

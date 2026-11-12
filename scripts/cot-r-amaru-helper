@@ -71,20 +71,263 @@ package_version() {
 }
 
 service_state() {
-  local unit="$1"
-  systemctl is-active "$unit" 2>/dev/null || echo inactive
+  local unit="$1" out
+  # is-active exits non-zero for activating/failed; still print the state word.
+  out="$(systemctl is-active "$unit" 2>/dev/null || true)"
+  printf '%s' "${out:-unknown}"
 }
 
 service_enabled() {
-  local unit="$1"
-  systemctl is-enabled "$unit" 2>/dev/null || echo disabled
+  local unit="$1" out
+  out="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+  printf '%s' "${out:-unknown}"
 }
 
-db_present() {
+# Read KEY from /etc/default/amaru (or similar), strip surrounding quotes/spaces.
+env_get_var() {
+  local key="$1" file="${2:-$AMARU_ENV_FILE}" line val
+  [[ -f "$file" ]] || return 0
+  line="$(grep -E "^${key}=" "$file" 2>/dev/null | tail -n1 || true)"
+  [[ -n "$line" ]] || return 0
+  val="${line#*=}"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  if [[ "$val" == \"*\" ]]; then val="${val:1:-1}"; fi
+  if [[ "$val" == \'*\' ]]; then val="${val:1:-1}"; fi
+  printf '%s' "$val"
+}
+
+amaru_network() {
   local net
-  net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-  net="${net:-mainnet}"
-  [[ -d "${AMARU_HOME}/chain.${net}.db" || -d "${AMARU_HOME}/ledger.${net}.db" ]]
+  net="$(env_get_var AMARU_NETWORK)"
+  printf '%s' "${net:-mainnet}"
+}
+
+db_chain_path() {
+  local p
+  p="$(env_get_var AMARU_DB_CHAIN)"
+  if [[ -n "$p" ]]; then
+    printf '%s' "$p"
+  else
+    printf '%s' "${AMARU_HOME}/chain.$(amaru_network).db"
+  fi
+}
+
+db_ledger_path() {
+  local p
+  p="$(env_get_var AMARU_DB_LEDGER)"
+  if [[ -n "$p" ]]; then
+    printf '%s' "$p"
+  else
+    printf '%s' "${AMARU_HOME}/ledger.$(amaru_network).db"
+  fi
+}
+
+# True when chain or ledger dir exists and looks non-empty (has entries beyond . / ..).
+db_present() {
+  local chain ledger
+  chain="$(db_chain_path)"
+  ledger="$(db_ledger_path)"
+  python3 - "$chain" "$ledger" <<'PY'
+import os, sys
+for path in sys.argv[1:]:
+    if not path or not os.path.isdir(path):
+        continue
+    try:
+        entries = [e for e in os.listdir(path) if e not in (".", "..")]
+    except PermissionError:
+        # Dir exists but unreadable to this user; treat as present.
+        raise SystemExit(0)
+    if entries:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+data_bytes() {
+  if [[ -d "${AMARU_HOME}" ]]; then
+    du -sb "${AMARU_HOME}" 2>/dev/null | awk '{print $1}'
+  else
+    echo 0
+  fi
+}
+
+BOOTSTRAP_MARK="${COT_R_RUN}/amaru-bootstrap.mark.json"
+
+write_bootstrap_mark() {
+  mkdir -p "${COT_R_RUN}"
+  local now baseline
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  baseline="$(data_bytes)"
+  python3 -c 'import json,sys; print(json.dumps({
+    "started_at": sys.argv[1],
+    "baseline_bytes": int(sys.argv[2]),
+  }))' "$now" "$baseline" >"${BOOTSTRAP_MARK}"
+  chmod 0640 "${BOOTSTRAP_MARK}" 2>/dev/null || true
+  chown root:cot-r "${BOOTSTRAP_MARK}" 2>/dev/null || true
+}
+
+# Emit bootstrap progress JSON object to stdout (single line).
+bootstrap_progress_json() {
+  local boot_active="$1"
+  python3 - "${AMARU_BOOTSTRAP_SERVICE}" "${AMARU_HOME}" "${BOOTSTRAP_MARK}" "$boot_active" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+
+unit, home, mark_path, boot_active = sys.argv[1:5]
+out = {
+    "unit_state": boot_active,
+    "downloaded_bytes": None,
+    "completed_snapshots": None,
+    "message": None,
+    "data_bytes": 0,
+    "baseline_bytes": None,
+    "delta_bytes": None,
+    "started_at": None,
+    "failed": False,
+    "error": None,
+    "last_log": None,
+}
+
+try:
+    out["data_bytes"] = int(
+        subprocess.check_output(["du", "-sb", home], text=True, stderr=subprocess.DEVNULL).split()[0]
+    )
+except Exception:
+    out["data_bytes"] = 0
+
+mark = Path(mark_path)
+if mark.is_file():
+    try:
+        m = json.loads(mark.read_text(encoding="utf-8"))
+        out["started_at"] = m.get("started_at")
+        out["baseline_bytes"] = int(m.get("baseline_bytes") or 0)
+        out["delta_bytes"] = max(0, out["data_bytes"] - out["baseline_bytes"])
+    except Exception:
+        pass
+
+# Parse recent journal for progress + errors
+try:
+    raw = subprocess.check_output(
+        ["journalctl", "-u", unit, "-n", "80", "-o", "cat", "--no-pager"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+except Exception:
+    raw = ""
+
+last_progress = None
+last_error = None
+last_line = None
+complete = False
+IGNORE_PLAIN = (
+    "consumed ",
+    "deactivated successfully",
+    "finished amaru-bootstrap",
+    "started amaru-bootstrap",
+)
+
+def _noise_plain(text: str) -> bool:
+    low = text.lower()
+    return any(tok in low for tok in IGNORE_PLAIN)
+
+for line in raw.splitlines():
+    s = line.strip()
+    if not s:
+        continue
+    if not _noise_plain(s):
+        last_line = s[:300]
+    try:
+        obj = json.loads(s)
+    except Exception:
+        low = s.lower()
+        if _noise_plain(s):
+            continue
+        if ("error" in low or "failed" in low) and "consumed" not in low:
+            last_error = s[:400]
+        continue
+    fields = obj.get("fields") or {}
+    level = str(obj.get("level") or "").upper()
+    msg = str(fields.get("message") or obj.get("message") or "")
+    if msg in ("progress.download", "progress.complete", "complete") or "downloaded_bytes" in fields:
+        last_progress = dict(fields)
+        last_progress["_msg"] = msg
+    if msg in ("progress.complete", "complete"):
+        complete = True
+    if level in ("ERROR", "ERR") or (
+        ("error" in msg.lower() or "fail" in msg.lower())
+        and msg not in ("progress.complete", "complete")
+    ):
+        err_txt = fields.get("error") or fields.get("message") or msg or s
+        last_error = str(err_txt)[:400]
+
+if last_progress:
+    try:
+        if last_progress.get("downloaded_bytes") is not None:
+            out["downloaded_bytes"] = int(last_progress.get("downloaded_bytes"))
+    except Exception:
+        pass
+    try:
+        if last_progress.get("completed_snapshots") is not None:
+            out["completed_snapshots"] = int(last_progress.get("completed_snapshots"))
+    except Exception:
+        pass
+    out["message"] = last_progress.get("_msg") or last_progress.get("message") or "progress.download"
+    if last_progress.get("epoch") is not None:
+        out["epoch"] = last_progress.get("epoch")
+    if last_progress.get("point") is not None:
+        out["point"] = last_progress.get("point")
+
+out["complete"] = complete
+
+# Unit failure (not "inactive" after success)
+try:
+    failed = subprocess.run(
+        ["systemctl", "is-failed", unit],
+        capture_output=True, text=True, timeout=3, check=False,
+    ).stdout.strip()
+    if failed == "failed":
+        out["failed"] = True
+except Exception:
+    pass
+
+# Result= from systemctl show
+result = ""
+status_code = ""
+try:
+    show = subprocess.check_output(
+        ["systemctl", "show", unit, "-p", "Result", "-p", "ExecMainStatus", "--value"],
+        text=True, stderr=subprocess.DEVNULL,
+    ).strip().splitlines()
+    result = show[0] if show else ""
+    status_code = show[1] if len(show) > 1 else ""
+    out["systemd_result"] = result
+    out["systemd_status"] = status_code
+    if result and result not in ("success", ""):
+        out["failed"] = True
+        if not out["error"]:
+            out["error"] = f"systemd Result={result} status={status_code}"
+except Exception:
+    pass
+
+# Successful complete must not be reported as failure
+if complete and result in ("success", ""):
+    out["failed"] = False
+    last_error = None
+
+if last_error and out["failed"]:
+    out["error"] = last_error
+elif last_error and not complete:
+    out["error"] = last_error
+if last_line:
+    out["last_log"] = last_line
+
+# Prefer downloaded_bytes as delta display when mark missing
+if out["delta_bytes"] is None and out["downloaded_bytes"] is not None:
+    out["delta_bytes"] = out["downloaded_bytes"]
+
+print(json.dumps(out))
+PY
 }
 
 cmd_status() {
@@ -111,25 +354,31 @@ cmd_status() {
   local boot_done_json="false" auto_json="false"
   [[ "$boot_done" == "1" ]] && boot_done_json="true"
   [[ "$auto_start" == "1" ]] && auto_json="true"
-  python3 -c 'import json,sys; print(json.dumps({
-    "ok": True,
-    "impl": sys.argv[1],
-    "installed": sys.argv[2] == "true",
-    "version": sys.argv[3],
-    "service_active": sys.argv[4],
-    "service_enabled": sys.argv[5],
-    "bootstrap_active": sys.argv[6],
-    "bootstrap_done": sys.argv[7] == "true",
-    "db_present": sys.argv[8] == "true",
-    "auto_start": sys.argv[9] == "true",
-    "env_file": sys.argv[10],
-    "env_exists": sys.argv[11] == "true",
-    "home": sys.argv[12],
-    "cache_dir": sys.argv[13],
-  }))' \
+  local progress
+  progress="$(bootstrap_progress_json "$boot_active" 2>/dev/null || echo '{}')"
+  python3 -c 'import json,sys
+prog=json.loads(sys.argv[14] or "{}")
+print(json.dumps({
+  "ok": True,
+  "impl": sys.argv[1],
+  "installed": sys.argv[2] == "true",
+  "version": sys.argv[3],
+  "service_active": sys.argv[4],
+  "service_enabled": sys.argv[5],
+  "bootstrap_active": sys.argv[6],
+  "bootstrap_done": sys.argv[7] == "true",
+  "db_present": sys.argv[8] == "true",
+  "auto_start": sys.argv[9] == "true",
+  "env_file": sys.argv[10],
+  "env_exists": sys.argv[11] == "true",
+  "home": sys.argv[12],
+  "cache_dir": sys.argv[13],
+  "progress": prog,
+}))' \
     "$impl" "$installed" "$ver" "$active" "$enabled" "$boot_active" \
     "$boot_done_json" "$has_db" "$auto_json" \
-    "${AMARU_ENV_FILE}" "$env_exists" "${AMARU_HOME}" "${COT_R_CACHE}"
+    "${AMARU_ENV_FILE}" "$env_exists" "${AMARU_HOME}" "${COT_R_CACHE}" \
+    "$progress"
 }
 
 resolve_version() {
@@ -202,38 +451,85 @@ cmd_install() {
 }
 
 cmd_bootstrap() {
+  # Start bootstrap asynchronously; status/progress is polled via cmd_status.
   package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
   if db_present; then
     echo '{"ok":false,"error":"databases already present; wipe first"}' >&2
     exit 1
   fi
-  # Prefer one-shot bootstrap unit when available
+  local boot_state
+  boot_state="$(service_state "${AMARU_BOOTSTRAP_SERVICE}")"
+  if [[ "$boot_state" == "active" || "$boot_state" == "activating" ]]; then
+    echo '{"ok":false,"error":"bootstrap already running"}' >&2
+    exit 1
+  fi
+  write_bootstrap_mark
   if systemctl list-unit-files "${AMARU_BOOTSTRAP_SERVICE}" >/dev/null 2>&1; then
     systemctl reset-failed "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
-    systemctl start "${AMARU_BOOTSTRAP_SERVICE}"
+    if ! systemctl start --no-block "${AMARU_BOOTSTRAP_SERVICE}"; then
+      local why
+      why="$(journalctl -u "${AMARU_BOOTSTRAP_SERVICE}" -n 20 -o cat --no-pager 2>/dev/null | tail -n 5 | tr '\n' ' ')"
+      python3 -c 'import json,sys; print(json.dumps({"ok":False,"error":"failed to start amaru-bootstrap: "+sys.argv[1]}))' \
+        "${why:-systemctl start failed}" >&2
+      exit 1
+    fi
   else
     local net
-    net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-    net="${net:-mainnet}"
-    sudo -u amaru amaru node bootstrap --network "$net"
+    net="$(amaru_network)"
+    # No unit: run in background under amaru user
+    mkdir -p "${COT_R_RUN}"
+    nohup sudo -u amaru amaru node bootstrap --network "$net" \
+      >"${COT_R_RUN}/amaru-bootstrap.out" 2>&1 &
+    echo $! >"${COT_R_RUN}/amaru-bootstrap.pid"
   fi
-  if db_present; then
-    set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 1
-  fi
+  sleep 1
   cmd_status
 }
 
-cmd_wipe() {
-  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
+cmd_bootstrap_stop() {
+  # Stop Mithril/bootstrap without wiping DBs.
   systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+  # Kill leftover bootstrap / mithril client processes for user amaru
+  pkill -u amaru -f 'amaru node bootstrap' 2>/dev/null || true
+  pkill -u amaru -f 'mithril' 2>/dev/null || true
+  if [[ -f "${COT_R_RUN}/amaru-bootstrap.pid" ]]; then
+    local pid
+    pid="$(cat "${COT_R_RUN}/amaru-bootstrap.pid" 2>/dev/null || true)"
+    if [[ -n "$pid" ]]; then
+      kill -TERM "$pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -f "${COT_R_RUN}/amaru-bootstrap.pid"
+  fi
+  systemctl reset-failed "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+  rm -f "${BOOTSTRAP_MARK}" 2>/dev/null || true
+  sleep 1
+  local st
+  st="$(service_state "${AMARU_BOOTSTRAP_SERVICE}")"
+  if [[ "$st" == "active" || "$st" == "activating" ]]; then
+    # Force kill unit cgroup
+    systemctl kill -s SIGKILL "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+    systemctl stop "${AMARU_BOOTSTRAP_SERVICE}" 2>/dev/null || true
+    sleep 1
+    st="$(service_state "${AMARU_BOOTSTRAP_SERVICE}")"
+  fi
+  if pgrep -u amaru -f 'amaru node bootstrap' >/dev/null 2>&1; then
+    echo '{"ok":false,"error":"bootstrap process still running after stop"}' >&2
+    exit 1
+  fi
+  python3 -c 'import json,sys; print(json.dumps({"ok":True,"stopped":True,"bootstrap_active":sys.argv[1]}))' "$st"
+}
+
+cmd_wipe() {
+  cmd_bootstrap_stop >/dev/null || true
+  systemctl stop "${AMARU_SERVICE}" 2>/dev/null || true
   if command -v amaru >/dev/null 2>&1; then
-    local net
-    net="$(grep -E '^AMARU_NETWORK=' "${AMARU_ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2- || true)"
-    net="${net:-mainnet}"
-    sudo -u amaru amaru node rm --wipe-all-dbs --network "$net" 2>/dev/null || true
+    sudo -u amaru amaru node rm --wipe-all-dbs --network "$(amaru_network)" 2>/dev/null || true
   fi
   # Fallback remove
-  rm -rf "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db "${AMARU_HOME}/snapshots" 2>/dev/null || true
+  rm -rf "$(db_chain_path)" "$(db_ledger_path)" "${AMARU_HOME}/snapshots" \
+    "${AMARU_HOME}/chain."*.db "${AMARU_HOME}/ledger."*.db 2>/dev/null || true
   set_conf_var COT_R_AMARU_BOOTSTRAP_DONE 0
   cmd_status
 }
@@ -362,6 +658,7 @@ Usage: cot-r-amaru-helper <command> [args]
   install [version]
   install-file <deb-path>
   bootstrap
+  bootstrap-stop
   wipe
   env-get
   env-write <staging-file-under-/run/cot-r>
@@ -381,6 +678,7 @@ main() {
     install) cmd_install "${1:-}" ;;
     install-file) cmd_install_file "${1:-}" ;;
     bootstrap) cmd_bootstrap ;;
+    bootstrap-stop) cmd_bootstrap_stop ;;
     wipe) cmd_wipe ;;
     env-get) cmd_env_get ;;
     env-write) cmd_env_write "${1:-}" ;;
