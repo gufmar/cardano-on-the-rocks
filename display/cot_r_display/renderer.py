@@ -550,6 +550,9 @@ class Renderer:
         if kind == "logo":
             self._draw_logo_slide()
             return
+        if kind == "qr":
+            self._draw_node_qr_slide(payload)
+            return
         if kind == "cpu":
             self._draw_cpu_slide(payload)
             return
@@ -651,6 +654,51 @@ class Renderer:
                 draw, cores, x0=x0, y0=16, bar_w=bar_w, bar_h=42, gap=gap
             )
 
+    def _draw_node_qr_slide(self, payload: dict) -> None:
+        """Wi-Fi or status URL QR beside a short caption (same 64px column as onboarding)."""
+        digit = str(payload.get("digit") or "")
+        title = str(payload.get("title") or "QR")[:9]
+        lines = [str(x) for x in (payload.get("lines") or [])][:2]
+        qr_data = str(payload.get("qr_data") or "")
+        qr_side = str(payload.get("qr_side") or "right").lower()
+        if qr_side not in ("left", "right"):
+            qr_side = "right"
+        qr_w = min(self.width, self.height)
+        text_w = self.width - qr_w
+        if qr_side == "right":
+            text_ox, qr_ox = 0, text_w
+        else:
+            qr_ox, text_ox = 0, qr_w
+        matrix, _planned = self._qr_matrix_for_box(qr_data, max_w=qr_w, max_h=self.height)
+        big = self._big_font(28)
+        small = self._small_font(11)
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            if digit and big is not None:
+                draw.text((text_ox + 2, -2), digit[:1], font=big, fill="white")
+                ty = 28
+            elif digit:
+                draw.text((text_ox + 2, 0), digit[:1], fill="white")
+                ty = 14
+            else:
+                ty = 4
+            caps = [title] + lines
+            for line in caps[:3]:
+                if small is not None:
+                    draw.text((text_ox + 1, ty), line[:9], font=small, fill="white")
+                else:
+                    draw.text((text_ox + 1, ty), line[:9], fill="white")
+                ty += 12
+            if matrix is None:
+                draw.text((qr_ox + 2, 24), "QR n/a", fill="white")
+                return
+            got = self._blit_qr(
+                draw, matrix, max_w=qr_w, max_h=self.height, ox=qr_ox, oy=0
+            )
+            if got < 2:
+                draw.rectangle((qr_ox, 50, qr_ox + qr_w - 1, 63), outline="black", fill="black")
+                draw.text((qr_ox + 2, 52), "QR dense", fill="white")
+
     def _draw_tip_slide(self, payload: dict) -> None:
         block = payload.get("block_no")
         slot = payload.get("slot")
@@ -660,7 +708,8 @@ class Renderer:
         animate = bool(payload.get("animate")) and block is not None and prev is not None
         label = self._fmt_num(block)
         small = self._small_font(11)
-        num = self._big_font(18) or self._small_font(16) or small
+        # ~8-digit tip heights need ~13–14pt to fit right of the glyph.
+        num = self._small_font(14) or self._small_font(12) or small
 
         def paint(ox: int) -> None:
             with self._canvas() as draw:
@@ -672,11 +721,11 @@ class Renderer:
                 # Small block on the left; block number uses most of the width.
                 self._draw_iso_block_small(draw, x0=4, y0=20, ox=ox)
                 tx = 32
-                ty = 22
+                ty = 24
                 if num is not None:
                     draw.text((tx, ty), label[:12], font=num, fill="white")
                 else:
-                    draw.text((tx, ty + 4), label[:12], fill="white")
+                    draw.text((tx, ty + 2), label[:12], fill="white")
                 foot_bits = []
                 if phase == "on_tip" or (gap is not None and int(gap) <= 300):
                     if gap is None or int(gap) == 0:

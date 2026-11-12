@@ -48,6 +48,11 @@ def setup_url(mgmt_ipv4: str, port: int = MGMT_PORT) -> str:
     return f"http://{mgmt_ipv4}:{port}/setup"
 
 
+def status_url(mgmt_ipv4: str, port: int = MGMT_PORT) -> str:
+    """Phone watch dashboard (not the setup wizard)."""
+    return f"http://{mgmt_ipv4}:{port}/status"
+
+
 def read_ssid() -> Optional[str]:
     if not AP_ENV.is_file():
         return None

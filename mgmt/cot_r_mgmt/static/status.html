@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Amaru status</title>
+<style>
+:root {
+  --bg: #0b1210;
+  --panel: #14201c;
+  --text: #e8f5ef;
+  --muted: #8aa899;
+  --ok: #3dbe7a;
+  --warn: #e6a23c;
+  --accent: #39ff14;
+  --font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh;
+  font-family: var(--font);
+  color: var(--text);
+  background:
+    radial-gradient(900px 420px at 80% -10%, #1a3328, transparent),
+    linear-gradient(165deg, #101a16, var(--bg));
+}
+.wrap {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 2rem;
+}
+.brand {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -.02em;
+  margin: 0;
+}
+.board {
+  color: var(--muted);
+  margin: .2rem 0 1.1rem;
+  font-size: .95rem;
+}
+.card {
+  background: color-mix(in srgb, var(--panel) 92%, black);
+  border: 1px solid #24362e;
+  border-radius: 12px;
+  padding: 1rem 1.05rem;
+  margin: 0 0 .75rem;
+}
+.card h2 {
+  margin: 0 0 .55rem;
+  font-size: .78rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.phase {
+  font-size: 1.45rem;
+  font-weight: 700;
+  margin: 0;
+}
+.phase.on { color: var(--ok); }
+.phase.catch { color: var(--warn); }
+.sub { color: var(--muted); margin: .25rem 0 0; }
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .55rem .85rem;
+}
+.kv { margin: 0; }
+.kv dt {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+}
+.kv dd {
+  margin: .15rem 0 0;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+.bar {
+  margin-top: .55rem;
+  height: .55rem;
+  border: 1px solid #3a5348;
+  border-radius: 4px;
+  background: #0d1613;
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+}
+.foot {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: .8rem;
+}
+.err { color: #e05c5c; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <h1 class="brand">Amaru</h1>
+  <p class="board" id="board">loading…</p>
+
+  <section class="card">
+    <h2>Sync</h2>
+    <p class="phase" id="phase">…</p>
+    <p class="sub" id="sub"></p>
+  </section>
+
+  <section class="card">
+    <h2>Tip</h2>
+    <dl class="grid">
+      <div class="kv"><dt>Local block</dt><dd id="block">—</dd></div>
+      <div class="kv"><dt>Local slot</dt><dd id="slot">—</dd></div>
+      <div class="kv"><dt>Gap</dt><dd id="gap">—</dd></div>
+      <div class="kv"><dt>Network block</dt><dd id="net">—</dd></div>
+    </dl>
+    <div class="bar" title="sync"><span id="syncbar"></span></div>
+  </section>
+
+  <section class="card">
+    <h2>Host</h2>
+    <dl class="grid">
+      <div class="kv"><dt>Load 1/5/15</dt><dd id="load">—</dd></div>
+      <div class="kv"><dt>CPU °C</dt><dd id="temp">—</dd></div>
+      <div class="kv"><dt>Mem used</dt><dd id="mem">—</dd></div>
+      <div class="kv"><dt>Node RSS</dt><dd id="rss">—</dd></div>
+    </dl>
+  </section>
+
+  <p class="foot" id="foot">Auto-refresh every 3s · read-only</p>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+function n(v) { return (v == null || v === "") ? "—" : String(v); }
+function mib(v) {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return "—";
+  if (x >= 1024) return (x / 1024).toFixed(1) + " GiB";
+  return Math.round(x) + " MiB";
+}
+async function tick() {
+  try {
+    const r = await fetch("/api/v1/watch/node", { cache: "no-store" });
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error((d && d.error) || "bad response");
+    $("board").textContent = (d.device_label || d.device_id || "board")
+      + (d.version ? (" · Amaru " + d.version) : "");
+    const tip = d.tip || {};
+    const phase = tip.phase || d.phase || "";
+    const el = $("phase");
+    el.textContent = d.headline || phase || "…";
+    el.className = "phase" + (phase === "on_tip" || phase === "near_tip" ? " on"
+      : (phase === "catching_up" ? " catch" : ""));
+    $("sub").textContent = d.subline || "";
+    $("block").textContent = n(tip.block_no);
+    $("slot").textContent = n(tip.slot);
+    $("gap").textContent = tip.gap_blocks == null ? "—" : String(tip.gap_blocks);
+    $("net").textContent = n(tip.network_block || (d.network_tip && d.network_tip.block_no));
+    const pct = Number(d.sync_pct);
+    $("syncbar").style.width = Number.isFinite(pct) ? (Math.max(0, Math.min(100, pct)) + "%") : "0%";
+    const L = d.load || {};
+    $("load").textContent = [L["1"], L["5"], L["15"]].map(n).join(" / ");
+    const t = d.temps || {};
+    $("temp").textContent = t["cpu-thermal"] != null
+      ? (Math.round(t["cpu-thermal"]) + "°")
+      : "—";
+    const m = d.memory || {};
+    $("mem").textContent = mib(m.used_mib) + " / " + mib(m.total_mib);
+    $("rss").textContent = m.node_running ? mib(m.node_rss_mib) : "stopped";
+    $("foot").textContent = "Updated " + new Date().toLocaleTimeString() + " · read-only";
+    $("foot").classList.remove("err");
+  } catch (e) {
+    $("foot").textContent = "Watch error: " + (e && e.message ? e.message : e);
+    $("foot").classList.add("err");
+  }
+}
+tick();
+setInterval(tick, 3000);
+</script>
+</body>
+</html>

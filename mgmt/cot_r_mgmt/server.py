@@ -4,6 +4,8 @@
 
 Endpoints:
   GET  /api/v1/health        (no auth)   liveness
+  GET  /status               (no auth)   Amaru watch dashboard HTML
+  GET  /api/v1/watch/node    (no auth)   read-only tip/host for /status
   GET  /api/v1/status        (api auth)  identity + state
   GET  /api/v1/about         (api auth)  attribution / licence
   GET  /api/v1/peers         (api auth)  discovery snapshot
@@ -63,6 +65,7 @@ from cot_r_mgmt.state import StateStore  # noqa: E402
 from cot_r_mgmt.wizard import WizardStore  # noqa: E402
 
 SETUP_HTML = Path(__file__).resolve().parent / "static" / "setup.html"
+STATUS_HTML = Path(__file__).resolve().parent / "static" / "status.html"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -270,6 +273,16 @@ def _setup_page_html() -> str:
         )
 
 
+def _status_page_html() -> str:
+    try:
+        return STATUS_HTML.read_text(encoding="utf-8")
+    except OSError:
+        return (
+            "<!DOCTYPE html><html><body><h1>Status UI missing</h1>"
+            "<p>static/status.html not installed. Re-run prepare/update.</p></body></html>"
+        )
+
+
 def _read_json(handler: BaseHTTPRequestHandler, limit: int = 64 * 1024) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     length = int(handler.headers.get("Content-Length") or "0")
     if length > limit:
@@ -349,6 +362,23 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path in ("/setup", "/"):
             _html_response(self, 200, _setup_page_html())
+            return
+        if path == "/status":
+            # Public watch dashboard (no wizard session).
+            _html_response(self, 200, _status_page_html())
+            return
+        if path == "/api/v1/watch/node":
+            # Read-only Amaru/host projection for phones scanning the OLED QR.
+            try:
+                payload = CTX.node_oled.watch_snapshot()
+            except Exception as e:  # noqa: BLE001
+                _json_response(self, 500, {"ok": False, "error": str(e)})
+                return
+            payload["device_id"] = CTX.device_id
+            payload["device_label"] = CTX.device_label
+            payload["board_digit"] = board_digit()
+            payload["mgmt_ipv4"] = peersmod.local_mgmt_ipv4()
+            _json_response(self, 200, payload)
             return
         if path == "/api/v1/wizard/status":
             wiz = CTX.wizard.snapshot()

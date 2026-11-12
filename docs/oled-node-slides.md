@@ -6,17 +6,21 @@ the static gear screen and rotates a short carousel (~3.5 s per slide).
 | Slide | Content |
 |---|---|
 | Logo | Amaru mark (1-bit from `logo-icon.svg`) + label |
-| Progress | 3.1 / 3.2 / 3.3 phase; **On tip** when gap ≤ 300 blocks/slots |
+| Progress | Phase without wizard step numbers; **On tip** when gap ≤ 300 |
+| Wi-Fi QR | When Amaru is running and AP is enabled: join this board’s SSID |
+| Status QR | Link to public `/status` watch dashboard (not the setup wizard) |
 | CPU | Per-core bars (border = 100%, fill = busy %) + SoC °C |
 | Memory | `Mem OS` / `Mem Node` bars inside a full-RAM border |
-| Tip | Small isometric block left; large tip height on the right |
+| Tip | Small isometric block left; tip height on the right |
 | Mempool | Pending count when available; else last block `tx_count` |
 
 ## Tip tolerance
 
 Gaps of **≤ 300** blocks (or slots from the helper) count as **on tip**. The OLED
 shows `synced` / `ok ΔN` instead of alarming. Catch-up only appears when further
-behind. Footer line uses `Amaru`, not a vague `Nodes` label.
+behind. Progress titles omit wizard step numbers (`On tip`, not `3.3 On tip`).
+
+Public watch page: `http://<board>:8080/status` (API `/api/v1/watch/node`, no auth).
 
 ## Logo asset
 

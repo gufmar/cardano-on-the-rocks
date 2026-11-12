@@ -367,12 +367,12 @@ class NodeOled:
         if job.get("running"):
             op = str(job.get("op") or "job")
             detail = str(job.get("detail") or "")[:18]
-            return f"3.x {op}", detail or "working…", "Amaru"
+            return op[:18], detail or "working…", "Amaru"
         if local.get("bootstrap_active") in ("activating", "active"):
             prog = local.get("progress") or {}
             mib = prog.get("downloaded_mib") or prog.get("delta_mib")
             line = f"{mib} MiB" if mib is not None else "Mithril…"
-            return "3.2 Bootstrap", str(line), "Amaru"
+            return "Bootstrap", str(line), "Amaru"
         if local.get("service_active") == "active":
             gap = tip.get("gap_blocks")
             if tip.get("phase") == "on_tip" or (
@@ -383,17 +383,56 @@ class NodeOled:
                     sub = "synced"
                 else:
                     sub = f"ok Δ{int(gap)}"
-                return "3.3 On tip", sub, "Amaru"
+                return "On tip", sub, "Amaru"
             return (
-                "3.3 Catch-up",
+                "Catch-up",
                 (f"−{int(gap)} blk" if gap is not None else "syncing"),
                 "Amaru",
             )
         if local.get("installed"):
             if local.get("db_present") or local.get("bootstrap_done"):
-                return "3.3 Ready", "Start Amaru", "Amaru"
-            return "3.2 Ready", "Bootstrap DB", "Amaru"
-        return "3.1 Install", "Amaru .deb", "Amaru"
+                return "Ready", "Start Amaru", "Amaru"
+            return "Ready", "Bootstrap DB", "Amaru"
+        return "Install", "Amaru .deb", "Amaru"
+
+    def _qr_slides(self, sample: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Wi-Fi join + status dashboard QR when the node is up."""
+        from cot_r_mgmt import onboarding as onboard
+        from cot_r_mgmt import peers
+
+        local = sample.get("local") or {}
+        if local.get("service_active") != "active":
+            return []
+        slides: List[Dict[str, Any]] = []
+        digit = onboard.board_digit()
+        if onboard.ap_is_enabled():
+            ssid = onboard.read_ssid()
+            psk = onboard.read_psk()
+            if ssid and psk:
+                slides.append(
+                    {
+                        "kind": "qr",
+                        "title": "Wi-Fi",
+                        "digit": digit,
+                        "lines": [ssid[:9], "join AP"],
+                        "qr_data": onboard.wifi_qr_payload(ssid, psk),
+                        "qr_side": "right",
+                    }
+                )
+        ip = peers.local_mgmt_ipv4()
+        if ip:
+            url = onboard.status_url(ip)
+            slides.append(
+                {
+                    "kind": "qr",
+                    "title": "Status",
+                    "digit": digit,
+                    "lines": ["Amaru", "status"],
+                    "qr_data": url,
+                    "qr_side": "left",
+                }
+            )
+        return slides
 
     def _slides(self, sample: Dict[str, Any]) -> List[Dict[str, Any]]:
         title, line2, line3 = self._phase_label(sample)
@@ -411,46 +450,90 @@ class NodeOled:
                 "line2": line2,
                 "line3": line3,
             },
-            {
-                "kind": "cpu",
-                "load1": load[0],
-                "load5": load[1],
-                "load15": load[2],
-                "cpu_c": cpu_t,
-                "gpu_c": gpu_t,
-                "nproc": os.cpu_count(),
-                "cores": cores,
+        ]
+        slides.extend(self._qr_slides(sample))
+        slides.extend(
+            [
+                {
+                    "kind": "cpu",
+                    "load1": load[0],
+                    "load5": load[1],
+                    "load15": load[2],
+                    "cpu_c": cpu_t,
+                    "gpu_c": gpu_t,
+                    "nproc": os.cpu_count(),
+                    "cores": cores,
+                },
+                {
+                    "kind": "memory",
+                    "os_used": sample.get("mem_used"),
+                    "os_peak": sample.get("mem_used_peak"),
+                    "os_total": sample.get("mem_total"),
+                    "node_rss": sample.get("node_rss"),
+                    "node_peak": sample.get("node_rss_peak"),
+                    "node_running": sample.get("node_running"),
+                },
+                {
+                    "kind": "tip",
+                    "block_no": tip.get("block_no"),
+                    "slot": tip.get("slot"),
+                    "gap_blocks": tip.get("gap_blocks"),
+                    "phase": tip.get("phase"),
+                    "prev_block_no": self._last_tip_block,
+                    "animate": bool(
+                        tip.get("block_no") is not None
+                        and self._last_tip_block is not None
+                        and tip.get("block_no") != self._last_tip_block
+                    ),
+                },
+                {
+                    "kind": "mempool",
+                    "mempool_tx": None,  # not in Amaru JSON traces yet
+                    "last_block_tx": tip.get("tx_count"),
+                    "block_no": tip.get("block_no"),
+                },
+            ]
+        )
+        return slides
+
+    def watch_snapshot(self) -> Dict[str, Any]:
+        """Public read-only fields for the /status dashboard."""
+        sample = self._sample()
+        tip = sample.get("tip") or {}
+        local = sample.get("local") or {}
+        load = sample.get("load") or (None, None, None)
+        run = local.get("run") or {}
+        title, line2, line3 = self._phase_label(sample)
+        return {
+            "ok": True,
+            "phase": tip.get("phase") or local.get("service_active"),
+            "headline": title,
+            "subline": line2,
+            "brand": line3,
+            "service_active": local.get("service_active"),
+            "installed": local.get("installed"),
+            "version": local.get("version"),
+            "tip": {
+                "slot": tip.get("slot"),
+                "block_no": tip.get("block_no"),
+                "gap_blocks": tip.get("gap_blocks"),
+                "network_block": tip.get("network_block"),
+                "tx_count": tip.get("tx_count"),
+                "phase": tip.get("phase"),
             },
-            {
-                "kind": "memory",
-                "os_used": sample.get("mem_used"),
-                "os_peak": sample.get("mem_used_peak"),
-                "os_total": sample.get("mem_total"),
-                "node_rss": sample.get("node_rss"),
-                "node_peak": sample.get("node_rss_peak"),
+            "network_tip": (run.get("network_tip") or {}),
+            "sync_pct": run.get("sync_pct"),
+            "load": {"1": load[0], "5": load[1], "15": load[2]},
+            "cores": sample.get("cores") or [],
+            "temps": sample.get("temps") or {},
+            "memory": {
+                "total_mib": sample.get("mem_total"),
+                "used_mib": sample.get("mem_used"),
+                "avail_mib": sample.get("mem_avail"),
+                "node_rss_mib": sample.get("node_rss"),
                 "node_running": sample.get("node_running"),
             },
-            {
-                "kind": "tip",
-                "block_no": tip.get("block_no"),
-                "slot": tip.get("slot"),
-                "gap_blocks": tip.get("gap_blocks"),
-                "phase": tip.get("phase"),
-                "prev_block_no": self._last_tip_block,
-                "animate": bool(
-                    tip.get("block_no") is not None
-                    and self._last_tip_block is not None
-                    and tip.get("block_no") != self._last_tip_block
-                ),
-            },
-            {
-                "kind": "mempool",
-                "mempool_tx": None,  # not in Amaru JSON traces yet
-                "last_block_tx": tip.get("tx_count"),
-                "block_no": tip.get("block_no"),
-            },
-        ]
-        return slides
+        }
 
     def _loop(self) -> None:
         while not self._stop.wait(0.2):
@@ -460,6 +543,7 @@ class NodeOled:
                     break
                 continue
             self.active = True
+            wait = SLIDE_SECONDS
             try:
                 sample = self._sample()
                 slides = self._slides(sample)
@@ -471,11 +555,14 @@ class NodeOled:
                 ttl = int(SLIDE_SECONDS * 1000)
                 if slide.get("kind") == "tip" and slide.get("animate"):
                     ttl = max(ttl, 4200)
+                if slide.get("kind") == "qr":
+                    ttl = max(ttl, 7000)
+                    wait = 7.0
                 display_client.show_node_slide(slide, ttl_ms=ttl, priority=72)
                 block = (sample.get("tip") or {}).get("block_no")
                 if block is not None:
                     self._last_tip_block = int(block)
             except Exception:  # noqa: BLE001
                 log.exception("node OLED tick failed")
-            if self._stop.wait(SLIDE_SECONDS):
+            if self._stop.wait(wait):
                 break
