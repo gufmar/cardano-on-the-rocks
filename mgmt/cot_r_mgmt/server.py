@@ -393,7 +393,23 @@ class Handler(BaseHTTPRequestHandler):
                         "ui_step": ui_step,
                         "mgmt_state": hello.get("state"),
                         "wizard_role": role,
+                        "controlled_by": controlled_by or None,
+                        "controlled_by_id": controlled_by_id or None,
+                        "confirmed": confirmed,
                         "status": status,
+                        "busy_reason": (
+                            None
+                            if status != "busy"
+                            else (
+                                f"adopted by node {controlled_by or '?'}"
+                                if role == "adopted"
+                                else (
+                                    "already in Nodes (step ≥ 3 / confirmed)"
+                                    if (confirmed or ui_step >= 3)
+                                    else "busy"
+                                )
+                            )
+                        ),
                         "can_adopt": status == "available",
                         "can_free": status == "adopted",
                     }
@@ -944,6 +960,11 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 _json_response(self, 400, {"ok": False, "error": err})
                 return
+            target = str((body or {}).get("target") or "local")
+            if target not in ("", "local", "self"):
+                result = amarumod.install_on_peer(CTX.peer_token, target)
+                _json_response(self, 200 if result.get("ok") else 409, result)
+                return
             version = (body or {}).get("version")
             result = amarumod.install(str(version) if version else None)
             _json_response(self, 200 if result.get("ok") else 409, result)
@@ -951,8 +972,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/wizard/node/bootstrap":
             if not self._require_wizard_session():
                 return
-            # Drain optional JSON body (UI may send "{}") so keep-alive stays clean.
-            _read_json(self)
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            target = str((body or {}).get("target") or "local")
+            if target not in ("", "local", "self"):
+                _json_response(
+                    self,
+                    400,
+                    {
+                        "ok": False,
+                        "error": (
+                            "Mithril bootstrap is local-only; select this board, "
+                            "or use Copy snapshot for an adopted peer"
+                        ),
+                    },
+                )
+                return
             result = amarumod.bootstrap()
             _json_response(self, 200 if result.get("ok") else 409, result)
             return
@@ -966,7 +1003,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/v1/wizard/node/wipe":
             if not self._require_wizard_session():
                 return
-            _read_json(self)
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            target = str((body or {}).get("target") or "local")
+            if target not in ("", "local", "self"):
+                result = amarumod.peer_wipe(CTX.peer_token, target)
+                _json_response(self, 200 if result.get("ok") else 500, result)
+                return
             result = amarumod.wipe()
             _json_response(self, 200 if result.get("ok") else 500, result)
             return
@@ -977,7 +1022,13 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 _json_response(self, 400, {"ok": False, "error": err})
                 return
-            result = amarumod.service(str((body or {}).get("action") or ""))
+            target = str((body or {}).get("target") or "local")
+            action = str((body or {}).get("action") or "")
+            if target not in ("", "local", "self"):
+                result = amarumod.peer_service(CTX.peer_token, target, action)
+                _json_response(self, 200 if result.get("ok") else 400, result)
+                return
+            result = amarumod.service(action)
             _json_response(self, 200 if result.get("ok") else 400, result)
             return
         if path == "/api/v1/wizard/node/tune-catchup":

@@ -971,9 +971,10 @@ cmd_tune_catchup() {
   mkdir -p "${drop_dir}"
   cat >"${drop_dir}/50-cot-r-catchup.conf" <<'EOF'
 # Managed by cot-r-amaru-helper tune-catchup
-# Upstream unit sets MemoryHigh=1G; on 4 GiB RockPi that reclaim-throttles hard during sync.
+# Upstream unit sets MemoryHigh=1G. Leave ~0.8 GiB for OS/mgmt on 4 GiB RockPi.
 [Service]
-MemoryHigh=2G
+MemoryHigh=3G
+MemoryMax=infinity
 EOF
 
   systemctl daemon-reload
@@ -991,11 +992,11 @@ print(json.dumps({
     "AMARU_LOG": "info",
     "AMARU_TUI_OFF": "true",
     "AMARU_WITH_JSON_TRACES": "true",
-    "MemoryHigh": "2G",
+    "MemoryHigh": "3G",
   },
   "notes": [
     "Default Amaru log filter enables consensus/ledger DEBUG (span enter/exit flood into journald).",
-    "Upstream amaru.service MemoryHigh=1G was reclaim-throttling on this board.",
+    "Upstream amaru.service MemoryHigh=1G was reclaim-throttling; cot-r uses MemoryHigh=3G on 4 GiB.",
     "Optional later: raise AMARU_PEERS_MAX_UPSTREAM (e.g. 6) if uplink and RAM allow.",
   ],
 }))' "$restarted"

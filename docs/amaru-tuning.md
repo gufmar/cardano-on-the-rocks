@@ -35,10 +35,16 @@ Plus systemd drop-in `/etc/systemd/system/amaru.service.d/50-cot-r-catchup.conf`
 
 ```ini
 [Service]
-MemoryHigh=2G
+MemoryHigh=3G
+MemoryMax=infinity
 ```
 
 Then `systemctl daemon-reload && systemctl restart amaru`.
+
+Host `free` can still show spare RAM while Amaru is capped: `MemoryHigh` is a
+**per-unit** soft limit (RSS + service page cache). Upstream ships `1G`; cot-r
+raises that to **3G** on 4 GiB boards so DB cache can grow without starving
+OS/mgmt.
 
 `AMARU_LOG=info` drops the default consensus/ledger DEBUG span flood. Keep JSON
 traces on so wizard **Amaru observe** can still read `tip.adopt` /
@@ -50,6 +56,7 @@ traces on so wizard **Amaru observe** can still read `tip.adopt` /
 |---|---|
 | `AMARU_PEERS_MAX_UPSTREAM=6` | More parallel chain sync; costs RAM/sockets |
 | `AMARU_LOG=warn` | Even quieter; observe UI gets thinner |
+| `MemoryHigh=infinity` | Remove soft cap entirely if tip still stalls |
 | Do **not** set `AMARU_WITH_OPEN_TELEMETRY` | Extra export work on a small board |
 
 Logging alone will not turn a 4 GiB aarch64 board into a fast relay; it should

@@ -285,6 +285,15 @@ input[type=password], input[type=text] {
   display: flex; align-items: center; justify-content: space-between;
   gap: .75rem; margin: .65rem 0;
 }
+.target-row {
+  display: flex; flex-wrap: wrap; gap: .35rem;
+  margin: 0 0 .75rem;
+}
+.target-row button {
+  background: #2a3a58; padding: .45rem .7rem; font-size: .85rem;
+}
+.target-row button.active { background: var(--accent); }
+.target-hint { margin: 0 0 .75rem; font-size: .85rem; color: var(--muted); }
 .cluster-row {
   display: flex; flex-wrap: wrap; gap: .5rem; margin: .5rem 0 .85rem;
 }
@@ -380,7 +389,9 @@ input[type=password], input[type=text] {
 
   <section id="view-done" class="card hidden">
     <h2>Cardano nodes</h2>
-    <p>Amaru is the first deployable node. Install the Debian package, Mithril-bootstrap mainnet (~10 GiB), then edit <code>/etc/default/amaru</code>.</p>
+    <p>Pick a board, then install / bootstrap / configure that target. Mithril bootstrap is for this controller; adopted peers should copy the DB over LAN.</p>
+    <div id="nodeTargetRow" class="target-row"></div>
+    <p class="target-hint" id="nodeTargetHint">—</p>
     <div class="subtabs" id="nodeSubtabs">
       <button type="button" data-sub="install" class="active">3.1 Install</button>
       <button type="button" data-sub="bootstrap">3.2 Bootstrap</button>
@@ -392,11 +403,12 @@ input[type=password], input[type=text] {
 
     <div id="sub-install">
       <div class="node-list" id="nodeCatalog"></div>
-      <p class="meta" id="installStatus">Checking local Amaru…</p>
+      <p class="meta" id="installStatus">Checking Amaru…</p>
       <div class="row">
         <button id="btnInstallAmaru" type="button">Install Amaru (.deb)</button>
-        <button id="btnPushSnapshot" type="button" class="secondary">Copy snapshot to adopted</button>
+        <button id="btnPushSnapshot" type="button" class="secondary">Copy DB from this host</button>
       </div>
+      <p class="meta" id="installActionHint">Install acts on the selected board only.</p>
     </div>
 
     <div id="sub-bootstrap" class="hidden">
@@ -408,7 +420,7 @@ input[type=password], input[type=text] {
         <button id="btnBootstrapStop" type="button" class="warn">Stop bootstrap</button>
         <button id="btnWipeDb" type="button" class="warn">Wipe DB</button>
       </div>
-      <p class="meta">Wipe is required before a fresh bootstrap if databases already exist. Demo reset does not wipe Amaru DBs.</p>
+      <p class="meta" id="bootstrapActionHint">Wipe / Mithril apply to the selected board. Demo reset does not wipe Amaru DBs.</p>
     </div>
 
     <div id="sub-config" class="hidden">
@@ -438,9 +450,9 @@ input[type=password], input[type=text] {
         <button id="btnServiceStart" type="button">Start</button>
         <button id="btnServiceStop" type="button" class="secondary">Stop</button>
         <button id="btnServiceRestart" type="button" class="secondary">Restart</button>
-        <button id="btnTuneCatchup" type="button" class="secondary" title="AMARU_LOG=info + MemoryHigh=2G, then restart">Tune catch-up</button>
+        <button id="btnTuneCatchup" type="button" class="secondary" title="AMARU_LOG=info + MemoryHigh=3G, then restart">Tune catch-up</button>
       </div>
-      <p class="meta" style="margin:.35rem 0 0">Tune catch-up drops default consensus/ledger DEBUG journal spam and raises systemd MemoryHigh from 1 GiB to 2 GiB, then restarts Amaru.</p>
+      <p class="meta" style="margin:.35rem 0 0">Tune catch-up drops default consensus/ledger DEBUG journal spam and raises systemd MemoryHigh from 1 GiB to 3 GiB, then restarts Amaru.</p>
       <div id="envList"></div>
       <div id="dirtyBar" class="dirtybar clean hidden">
         <span id="dirtyMsg">No unsaved changes.</span>
@@ -474,6 +486,7 @@ input[type=password], input[type=text] {
     currentView: "view-welcome",
     nodeSub: "install",
     nodeStatus: null,
+    nodeTarget: "local",
     envOriginal: [],
     envDraft: [],
     envDirty: false,
@@ -789,7 +802,9 @@ input[type=password], input[type=text] {
           const step = (p.ui_step == null || p.ui_step === "") ? "?" : String(p.ui_step);
           meta.textContent = p.error
             ? `${p.addr} · ${p.error}`
-            : `${p.addr} · step ${step}`;
+            : (p.busy_reason
+              ? `${p.addr} · step ${step} · ${p.busy_reason}`
+              : `${p.addr} · step ${step}`);
           left.appendChild(title);
           left.appendChild(meta);
 
@@ -878,50 +893,118 @@ input[type=password], input[type=text] {
     });
   }
 
+  function isLocalTarget() {
+    return !state.nodeTarget || state.nodeTarget === "local";
+  }
+
+  function selectedBoard(data) {
+    const d = data || state.nodeStatus || {};
+    if (isLocalTarget()) {
+      return {
+        kind: "local",
+        id: "local",
+        label: "This board",
+        st: d.local || {},
+      };
+    }
+    const peers = d.adopted || [];
+    const hit = peers.find((p) => String(p.addr) === String(state.nodeTarget));
+    if (!hit) {
+      return {
+        kind: "peer",
+        id: state.nodeTarget,
+        label: state.nodeTarget,
+        st: {},
+        missing: true,
+      };
+    }
+    return {
+      kind: "peer",
+      id: String(hit.addr),
+      label: hit.device_label || hit.addr,
+      st: hit.status || {},
+    };
+  }
+
+  function paintNodeTargets(data) {
+    const row = $("nodeTargetRow");
+    row.innerHTML = "";
+    const mk = (id, label) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = label;
+      b.classList.toggle("active", String(state.nodeTarget) === String(id));
+      b.onclick = () => {
+        state.nodeTarget = id;
+        paintNodeTargets(data);
+        paintCluster(data);
+        paintInstallStatus((data && data.local) || {}, (data && data.job) || {});
+      };
+      row.appendChild(b);
+    };
+    mk("local", "This board");
+    (data.adopted || []).forEach((p) => {
+      if (!p.addr) return;
+      mk(String(p.addr), p.device_label || p.addr);
+    });
+    const board = selectedBoard(data);
+    const local = data.local || {};
+    if (board.kind === "local") {
+      $("nodeTargetHint").textContent =
+        "Actions apply to this controller. Use Mithril bootstrap here, then copy the DB to adopted peers.";
+    } else {
+      $("nodeTargetHint").textContent =
+        "Actions apply to adopted " + board.label
+        + ". Prefer Install + Copy DB from this host (skip Mithril on the peer).";
+    }
+    // If selected peer vanished, fall back to local.
+    if (board.missing) {
+      state.nodeTarget = "local";
+      paintNodeTargets(data);
+    }
+  }
+
   function paintCluster(data) {
     const strip = $("clusterStrip");
     strip.innerHTML = "";
-    const local = data.local || {};
+    const board = selectedBoard(data);
+    const st = board.st || {};
     const chip = (label, ok) => {
       const s = document.createElement("span");
       s.className = "chip " + (ok ? "ok" : "warn");
       s.textContent = label;
       return s;
     };
+    strip.appendChild(chip(board.label, true));
     strip.appendChild(chip(
-      `local: ${local.installed ? (local.version || "installed") : "not installed"}`,
-      !!local.installed
+      st.installed ? (st.version || "installed") : "not installed",
+      !!st.installed
     ));
     strip.appendChild(chip(
-      local.bootstrap_done || local.db_present ? "bootstrapped" : "no DB",
-      !!(local.bootstrap_done || local.db_present)
+      st.bootstrap_done || st.db_present ? "bootstrapped" : "no DB",
+      !!(st.bootstrap_done || st.db_present)
     ));
     strip.appendChild(chip(
-      `service ${local.service_active || "?"}`,
-      local.service_active === "active"
+      `service ${st.service_active || "?"}`,
+      st.service_active === "active"
     ));
-    if (local.service_active === "active" && local.run && local.run.slot != null) {
-      strip.appendChild(chip(`tip slot ${local.run.slot}`, true));
-      if (local.run.gap_blocks != null) {
+    if (st.service_active === "active" && st.run && st.run.slot != null) {
+      strip.appendChild(chip(`tip slot ${st.run.slot}`, true));
+      if (st.run.gap_blocks != null) {
         strip.appendChild(chip(
-          local.run.gap_blocks <= 50
-            ? ("near tip (−" + local.run.gap_blocks + ")")
-            : (local.run.gap_blocks + " behind"),
-          local.run.gap_blocks <= 50
+          st.run.gap_blocks <= 50
+            ? ("near tip (−" + st.run.gap_blocks + ")")
+            : (st.run.gap_blocks + " behind"),
+          st.run.gap_blocks <= 50
         ));
       }
     }
-    strip.appendChild(chip(
-      local.auto_start ? "auto-start on" : "auto-start off",
-      !!local.auto_start
-    ));
-    (data.adopted || []).forEach((p) => {
-      const st = p.status || {};
+    if (board.kind === "local") {
       strip.appendChild(chip(
-        `${p.device_label || p.addr}: ${st.installed ? "ok" : "missing"}`,
-        !!st.installed
+        st.auto_start ? "auto-start on" : "auto-start off",
+        !!st.auto_start
       ));
-    });
+    }
   }
 
   function fmtMiB(n) {
@@ -931,10 +1014,14 @@ input[type=password], input[type=text] {
   }
 
   function paintBootstrapProgress(local, job) {
-    const prog = (job && job.progress) || (local && local.progress) || {};
-    const unit = (local && local.bootstrap_active) || prog.unit_state || "";
-    const runningBoot = !!(job && job.running && job.op === "bootstrap")
-      || unit === "activating" || unit === "active";
+    const board = selectedBoard();
+    const st = board.kind === "local" ? (local || board.st || {}) : (board.st || {});
+    const prog = (job && job.progress) || (st && st.progress) || {};
+    const unit = (st && st.bootstrap_active) || prog.unit_state || "";
+    const runningBoot = board.kind === "local" && (
+      !!(job && job.running && job.op === "bootstrap")
+      || unit === "activating" || unit === "active"
+    );
     const bits = [];
     if (prog.downloaded_bytes != null) bits.push("downloaded " + fmtMiB(prog.downloaded_bytes));
     if (prog.delta_bytes != null) bits.push("disk +" + fmtMiB(prog.delta_bytes) + " since start");
@@ -945,9 +1032,9 @@ input[type=password], input[type=text] {
       : (runningBoot ? "Waiting for first progress sample…" : "—");
 
     const errBox = $("bootstrapErr");
-    const looksDone = !!(local && (local.bootstrap_done || local.db_present || (prog && prog.complete)));
+    const looksDone = !!(st && (st.bootstrap_done || st.db_present || (prog && prog.complete)));
     let errText = "";
-    if (!looksDone) {
+    if (board.kind === "local" && !looksDone) {
       errText = (job && job.error) || (prog.failed && (prog.error || "")) || "";
       if (errText && /Consumed |Deactivated successfully/i.test(errText)) {
         errText = "Bootstrap ended without a usable database. Check journalctl -u amaru-bootstrap, then wipe and retry if needed.";
@@ -961,6 +1048,17 @@ input[type=password], input[type=text] {
       errBox.classList.add("hidden");
     }
 
+    if (board.kind === "peer") {
+      $("bootstrapStatus").textContent = looksDone
+        ? (`${board.label} already has DBs. Use 3.1 Copy DB only if you need to refresh from this host.`)
+        : (`${board.label} has no DB yet. Prefer 3.1 → Copy DB from this host (Mithril is local-only).`);
+      $("bootstrapActionHint").textContent =
+        "Mithril bootstrap is disabled for adopted peers. Wipe still targets the selected peer.";
+      return;
+    }
+
+    $("bootstrapActionHint").textContent =
+      "Wipe / Mithril apply to this controller. Demo reset does not wipe Amaru DBs.";
     if (looksDone) {
       const epoch = prog && prog.epoch != null ? ` (epoch ${prog.epoch})` : "";
       $("bootstrapStatus").textContent = `Bootstrap complete${epoch}. Node is ready to start in 3.3 (or wipe to re-bootstrap).`;
@@ -1081,9 +1179,11 @@ input[type=password], input[type=text] {
   }
 
   function paintRunStatus(local) {
+    const board = selectedBoard();
+    const st = board.kind === "local" ? (local || board.st || {}) : (board.st || {});
     const box = $("runStatusBox");
-    const run = (local && local.run) || {};
-    const active = local && local.service_active === "active";
+    const run = (st && st.run) || {};
+    const active = st && st.service_active === "active";
     const title = $("runStatusTitle");
     const detail = $("runStatusDetail");
     const tip = $("runStatusTip");
@@ -1093,30 +1193,44 @@ input[type=password], input[type=text] {
       const phaseBit = run.phase === "near_tip"
         ? "near tip"
         : (run.phase === "catching_up" ? "catching up to tip" : "running");
-      title.innerHTML = "<strong>Node start success</strong> · " + phaseBit;
+      title.innerHTML = "<strong>" + board.label + " · running</strong> · " + phaseBit;
       detail.textContent = run.detail
         || "Amaru is running; tip progress will appear shortly.";
-      tip.textContent = "Use Amaru observe below for tip, peers, and host load (from journald + /proc).";
-    } else if (local && local.service_active === "failed") {
+      tip.textContent = board.kind === "local"
+        ? "Use Amaru observe below for tip, peers, and host load (from journald + /proc)."
+        : "Observe panels are local-only; peer tip chips come from peer status.";
+    } else if (st && st.service_active === "failed") {
       box.classList.add("warnbox");
-      title.innerHTML = "<strong>Node failed</strong>";
-      detail.textContent = (run && run.detail) || "amaru.service is failed. Check journalctl -u amaru.";
+      title.innerHTML = "<strong>" + board.label + " · failed</strong>";
+      detail.textContent = (run && run.detail) || "amaru.service is failed.";
       tip.textContent = "";
     } else {
       box.classList.add("warnbox");
-      title.innerHTML = "<strong>Node stopped</strong>";
-      detail.textContent = (local && (local.bootstrap_done || local.db_present))
-        ? "Databases are ready. Press Start to run Amaru (expect high CPU while catching up to tip)."
-        : "Install + bootstrap first, then Start.";
+      title.innerHTML = "<strong>" + board.label + " · stopped</strong>";
+      detail.textContent = (st && (st.bootstrap_done || st.db_present))
+        ? "Databases are ready. Press Start to run Amaru."
+        : (board.kind === "local"
+          ? "Install + bootstrap first, then Start."
+          : "Install + Copy DB from this host, then Start.");
       tip.textContent = "";
     }
+    // Rich observe UI is always this host's journals.
     paintObserve(local);
+    $("observeBox").classList.toggle("hidden", board.kind !== "local" || !active);
+    // Hide local-only env/tune when a peer is selected.
+    $("envList").classList.toggle("hidden", board.kind !== "local");
+    $("dirtyBar").classList.toggle("hidden", board.kind !== "local");
+    $("btnTuneCatchup").classList.toggle("hidden", board.kind !== "local");
+    $("btnAutoStart").closest(".toggle-row").classList.toggle("hidden", board.kind !== "local");
   }
 
   function paintInstallStatus(local, job) {
+    const board = selectedBoard();
+    const st = board.kind === "local" ? (local || {}) : (board.st || {});
     const parts = [];
-    if (local && local.installed) {
-      parts.push(`Amaru ${local.version || ""} installed`);
+    parts.push(board.label);
+    if (st && st.installed) {
+      parts.push(`Amaru ${st.version || ""} installed`);
     } else {
       parts.push("Amaru package not installed");
     }
@@ -1125,13 +1239,43 @@ input[type=password], input[type=text] {
     $("installStatus").textContent = parts.join(" · ");
     paintBootstrapProgress(local, job);
     paintRunStatus(local);
+
     const busy = !!(job && job.running);
+    const localReady = !!(local && (local.bootstrap_done || local.db_present));
     const bootUnit = local && (local.bootstrap_active === "activating" || local.bootstrap_active === "active");
-    $("btnInstallAmaru").disabled = busy;
-    $("btnBootstrap").disabled = busy || bootUnit || !(local && local.installed)
-      || !!(local && (local.bootstrap_done || local.db_present));
-    $("btnBootstrapStop").disabled = !(busy && job && job.op === "bootstrap") && !bootUnit;
-    $("btnPushSnapshot").disabled = !(local && (local.bootstrap_done || local.db_present));
+    const peerInstalled = !!(st && st.installed);
+    const peerHasDb = !!(st && (st.bootstrap_done || st.db_present));
+
+    if (board.kind === "local") {
+      $("btnInstallAmaru").textContent = st.installed
+        ? "Reinstall / upgrade Amaru (.deb)"
+        : "Install Amaru (.deb)";
+      $("btnInstallAmaru").disabled = busy;
+      $("installActionHint").textContent =
+        "Install reinstalls/upgrades Amaru on this board only (not adopted peers).";
+      $("btnPushSnapshot").textContent = "Copy DB to all adopted";
+      $("btnPushSnapshot").disabled = busy || !localReady
+        || !(((state.nodeStatus || {}).adopted || []).length);
+      $("btnBootstrap").disabled = busy || bootUnit || !(st && st.installed)
+        || !!(st && (st.bootstrap_done || st.db_present));
+      $("btnBootstrapStop").disabled = !(busy && job && job.op === "bootstrap") && !bootUnit;
+    } else {
+      $("btnInstallAmaru").textContent = peerInstalled
+        ? "Amaru already on peer"
+        : "Install Amaru on peer";
+      $("btnInstallAmaru").disabled = busy || peerInstalled;
+      $("installActionHint").textContent = peerInstalled
+        ? (peerHasDb
+          ? (board.label + " already has Amaru + DB. Start/Stop in 3.3, or Copy DB to refresh.")
+          : (board.label + " has Amaru but no DB. Use Copy DB from this host."))
+        : ("Install pulls the .deb from this host over LAN onto " + board.label + " only.");
+      $("btnPushSnapshot").textContent = "Copy DB to " + board.label;
+      $("btnPushSnapshot").disabled = busy || !localReady;
+      $("btnBootstrap").disabled = true;
+      $("btnBootstrapStop").disabled = true;
+    }
+    $("btnWipeDb").disabled = busy;
+
     const auto = !!(local && local.auto_start);
     $("btnAutoStart").textContent = auto ? "On" : "Off";
     $("btnAutoStart").classList.toggle("secondary", !auto);
@@ -1212,6 +1356,7 @@ input[type=password], input[type=text] {
       const data = await api("/api/v1/wizard/node/status");
       state.nodeStatus = data;
       paintCatalog(data.catalog);
+      paintNodeTargets(data);
       paintCluster(data);
       paintInstallStatus(data.local || {}, data.job || {});
       const job = data.job || {};
@@ -1250,10 +1395,14 @@ input[type=password], input[type=text] {
     }
   }
 
+  function targetBody(extra) {
+    const body = Object.assign({ target: state.nodeTarget || "local" }, extra || {});
+    return JSON.stringify(body);
+  }
   $("btnInstallAmaru").onclick = async () => {
     err("");
     try {
-      await api("/api/v1/wizard/node/install", { method: "POST", body: "{}" });
+      await api("/api/v1/wizard/node/install", { method: "POST", body: targetBody() });
       await loadNodes();
     } catch (e) { err(e.message); }
   };
@@ -1261,7 +1410,7 @@ input[type=password], input[type=text] {
     err("");
     $("bootstrapErr").classList.add("hidden");
     try {
-      await api("/api/v1/wizard/node/bootstrap", { method: "POST", body: "{}" });
+      await api("/api/v1/wizard/node/bootstrap", { method: "POST", body: targetBody() });
       setNodeSub("bootstrap");
       await loadNodes();
     } catch (e) {
@@ -1284,17 +1433,22 @@ input[type=password], input[type=text] {
     }
   };
   $("btnWipeDb").onclick = async () => {
-    if (!confirm("Wipe Amaru databases on this board? You will need to bootstrap again.")) return;
+    const board = selectedBoard();
+    const who = board.label || "this board";
+    if (!confirm("Wipe Amaru databases on " + who + "? You will need to bootstrap or copy DB again.")) return;
     err("");
     try {
-      await api("/api/v1/wizard/node/wipe", { method: "POST", body: "{}" });
+      await api("/api/v1/wizard/node/wipe", { method: "POST", body: targetBody() });
       await loadNodes();
     } catch (e) { err(e.message); }
   };
   $("btnPushSnapshot").onclick = async () => {
     err("");
     try {
-      await api("/api/v1/wizard/node/push-snapshot", { method: "POST", body: "{}" });
+      const body = isLocalTarget()
+        ? "{}"
+        : JSON.stringify({ addrs: [state.nodeTarget] });
+      await api("/api/v1/wizard/node/push-snapshot", { method: "POST", body });
       await loadNodes();
     } catch (e) { err(e.message); }
   };
@@ -1303,7 +1457,7 @@ input[type=password], input[type=text] {
     try {
       await api("/api/v1/wizard/node/service", {
         method: "POST",
-        body: JSON.stringify({ action }),
+        body: targetBody({ action }),
       });
       await loadNodes();
     } catch (e) { err(e.message); }
@@ -1319,7 +1473,7 @@ input[type=password], input[type=text] {
         body: JSON.stringify({ restart: true }),
       });
       $("nodeJobMsg").textContent = r && r.ok
-        ? "Catch-up tune applied (AMARU_LOG=info, MemoryHigh=2G); Amaru restarted."
+        ? "Catch-up tune applied (AMARU_LOG=info, MemoryHigh=3G); Amaru restarted."
         : "Catch-up tune failed.";
       await loadNodes();
     } catch (e) { err(e.message); }

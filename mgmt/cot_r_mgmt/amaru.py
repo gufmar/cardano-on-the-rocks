@@ -183,6 +183,36 @@ def install(version: Optional[str] = None, *, background: bool = True) -> Dict[s
     return _do()
 
 
+def install_on_peer(peer_token: Optional[str], addr: str) -> Dict[str, Any]:
+    """Install Amaru on an adopted peer from this master's cached .deb (LAN)."""
+    if not peer_token:
+        return {"ok": False, "error": "peer token missing"}
+    local_ip = peers.local_mgmt_ipv4()
+    if not local_ip:
+        return {"ok": False, "error": "local management IP unknown"}
+
+    def _do() -> Dict[str, Any]:
+        # Ensure a .deb exists in cache for the peer to pull.
+        deb = deb_path()
+        if not deb.get("ok"):
+            return deb
+        resp = peers.http_json(
+            "POST",
+            peers.peer_url(addr, "/api/v1/peer/node/install"),
+            body={"from_master": local_ip},
+            token=peer_token,
+            timeout=1800.0,
+        )
+        if resp.get("unreachable"):
+            return {"ok": False, "error": f"peer {addr} unreachable", "peer": resp}
+        if resp.get("skipped"):
+            return {"ok": True, "skipped": True, "addr": addr, "peer": resp}
+        ok = bool(resp.get("ok") or resp.get("installed"))
+        return {"ok": ok, "addr": addr, "peer": resp, "error": None if ok else resp.get("error")}
+
+    return _run_job("install-peer", _do)
+
+
 def install_file(path: Path, *, background: bool = True) -> Dict[str, Any]:
     def _do() -> Dict[str, Any]:
         return run_helper("install-file", str(path), timeout=600.0)
@@ -326,6 +356,39 @@ def push_snapshot_job(peer_token: Optional[str], addrs: List[str]) -> Dict[str, 
         return push_snapshot_to_peers(peer_token, addrs)
 
     return _run_job("push-snapshot", _do)
+
+
+def peer_service(peer_token: Optional[str], addr: str, action: str) -> Dict[str, Any]:
+    if not peer_token:
+        return {"ok": False, "error": "peer token missing"}
+    action = (action or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return {"ok": False, "error": "action must be start|stop|restart"}
+    resp = peers.http_json(
+        "POST",
+        peers.peer_url(addr, "/api/v1/peer/node/service"),
+        body={"action": action},
+        token=peer_token,
+        timeout=60.0,
+    )
+    if resp.get("unreachable"):
+        return {"ok": False, "error": f"peer {addr} unreachable", "peer": resp}
+    return {"ok": bool(resp.get("ok")), "addr": addr, "peer": resp, "error": resp.get("error")}
+
+
+def peer_wipe(peer_token: Optional[str], addr: str) -> Dict[str, Any]:
+    if not peer_token:
+        return {"ok": False, "error": "peer token missing"}
+    resp = peers.http_json(
+        "POST",
+        peers.peer_url(addr, "/api/v1/peer/node/wipe"),
+        body={},
+        token=peer_token,
+        timeout=120.0,
+    )
+    if resp.get("unreachable"):
+        return {"ok": False, "error": f"peer {addr} unreachable", "peer": resp}
+    return {"ok": bool(resp.get("ok")), "addr": addr, "peer": resp, "error": resp.get("error")}
 
 
 def wipe() -> Dict[str, Any]:
