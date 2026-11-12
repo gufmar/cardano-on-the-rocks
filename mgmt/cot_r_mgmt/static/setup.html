@@ -991,11 +991,14 @@ input[type=password], input[type=text] {
     if (st.service_active === "active" && st.run && st.run.slot != null) {
       strip.appendChild(chip(`tip slot ${st.run.slot}`, true));
       if (st.run.gap_blocks != null) {
+        const onTip = st.run.gap_blocks <= 300
+          || st.run.phase === "on_tip"
+          || st.run.phase === "near_tip";
         strip.appendChild(chip(
-          st.run.gap_blocks <= 50
-            ? ("near tip (−" + st.run.gap_blocks + ")")
+          onTip
+            ? (st.run.gap_blocks === 0 ? "on tip" : ("on tip Δ" + st.run.gap_blocks))
             : (st.run.gap_blocks + " behind"),
-          st.run.gap_blocks <= 50
+          onTip
         ));
       }
     }
@@ -1102,8 +1105,8 @@ input[type=password], input[type=text] {
 
     const net = run.network_tip || {};
     const pct = run.sync_pct != null ? Number(run.sync_pct) : null;
-    const phaseLabel = run.phase === "near_tip"
-      ? "Near tip"
+    const phaseLabel = (run.phase === "on_tip" || run.phase === "near_tip")
+      ? "On tip"
       : (run.phase === "catching_up" ? "Catching up" : (run.phase || "Running"));
 
     $("obs-overview").innerHTML =
@@ -1190,8 +1193,8 @@ input[type=password], input[type=text] {
     box.classList.remove("okbox", "warnbox");
     if (active) {
       box.classList.add("okbox");
-      const phaseBit = run.phase === "near_tip"
-        ? "near tip"
+      const phaseBit = (run.phase === "on_tip" || run.phase === "near_tip")
+        ? "on tip"
         : (run.phase === "catching_up" ? "catching up to tip" : "running");
       title.innerHTML = "<strong>" + board.label + " · running</strong> · " + phaseBit;
       detail.textContent = run.detail

@@ -105,7 +105,7 @@ def show_node_slide(
     priority: int = 72,
     ttl_ms: int = 4000,
 ) -> None:
-    """One Nodes (3.x) OLED slide: progress / cpu / memory / tip / mempool."""
+    """One Nodes (3.x) OLED slide: logo / progress / cpu / memory / tip / mempool."""
     send(
         {
             "cmd": "node_slide",

@@ -648,12 +648,13 @@ out["event_counts"] = {k: int(v) for k, v in event_counts.most_common(20)}
 out["recent"] = recent[-8:]
 
 if local and (local.get("slot") is not None or local.get("block_no") is not None):
-    near = False
-    if gap_blocks is not None and gap_blocks <= 50:
-        near = True
-    if gap_slots is not None and gap_slots <= 400:
-        near = True
-    out["phase"] = "near_tip" if near else "catching_up"
+    # RockPi demos: treat small gaps as on tip (chainsync jitter / slot lag).
+    on_tip = False
+    if gap_blocks is not None and gap_blocks <= 300:
+        on_tip = True
+    if gap_slots is not None and gap_slots <= 300:
+        on_tip = True
+    out["phase"] = "on_tip" if on_tip else "catching_up"
     bits = []
     if local.get("slot") is not None:
         bits.append(f"slot {local['slot']}")
@@ -665,15 +666,15 @@ if local and (local.get("slot") is not None or local.get("block_no") is not None
         bits.append(f"{gap_slots} slots behind peer tip")
     if out.get("headers_ahead"):
         bits.append(f"{out['headers_ahead']} headers buffered ahead of adopted tip")
-    if near:
+    if on_tip:
         out["detail"] = (
-            "Node start success. Near peer network tip (" + ", ".join(bits) + ")."
+            "Node start success. On peer network tip (" + ", ".join(bits) + ")."
         )
     else:
         out["detail"] = (
             "Node start success. Catching up from snapshot toward peer tip ("
             + ", ".join(bits)
-            + "). CPU stays high until near tip."
+            + "). CPU stays high until on tip."
         )
 else:
     out["phase"] = "starting"

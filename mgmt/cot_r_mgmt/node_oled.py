@@ -1,5 +1,5 @@
 # Copyright (C) 2026 Markus. SPDX-License-Identifier: AGPL-3.0-only
-"""OLED carousel for wizard Nodes (3.x): progress, CPU/temp, memory, tip, mempool."""
+"""OLED carousel for wizard Nodes (3.x): logo, progress, CPU, memory, tip, mempool."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ log = logging.getLogger("cot_r_mgmt.node_oled")
 SLIDE_SECONDS = float(os.environ.get("COT_R_NODE_OLED_SLIDE", "3.5"))
 SAMPLE_SECONDS = float(os.environ.get("COT_R_NODE_OLED_SAMPLE", "2.0"))
 AMARU_UNIT = os.environ.get("COT_R_AMARU_SERVICE", "amaru.service")
+# Gaps at or below this are still "on tip" (jitter / short peer lag).
+ON_TIP_GAP = int(os.environ.get("COT_R_NODE_OLED_ON_TIP_GAP", "300"))
 
 
 def _read_load() -> Tuple[Optional[float], Optional[float], Optional[float]]:
@@ -28,6 +30,27 @@ def _read_load() -> Tuple[Optional[float], Optional[float], Optional[float]]:
         return float(a), float(b), float(c)
     except (OSError, ValueError):
         return None, None, None
+
+
+def _read_cpu_times() -> List[Tuple[int, int]]:
+    """Per-CPU (idle_all, total) jiffies from /proc/stat."""
+    out: List[Tuple[int, int]] = []
+    try:
+        with open("/proc/stat", encoding="utf-8") as fh:
+            for line in fh:
+                if not line.startswith("cpu") or line.startswith("cpu "):
+                    continue
+                if not line[3].isdigit():
+                    continue
+                parts = line.split()
+                # user nice system idle iowait irq softirq steal …
+                vals = [int(x) for x in parts[1:8]]
+                idle = vals[3] + (vals[4] if len(vals) > 4 else 0)
+                total = sum(vals)
+                out.append((idle, total))
+    except (OSError, ValueError):
+        return []
+    return out
 
 
 def _read_temps_c() -> Dict[str, float]:
@@ -186,7 +209,9 @@ def _journal_tip() -> Dict[str, Any]:
     tip["tx_count"] = tx_count
     if local_block is not None and net_block is not None:
         tip["gap_blocks"] = max(0, net_block - local_block)
-        tip["phase"] = "near_tip" if tip["gap_blocks"] <= 50 else "catching_up"
+        tip["phase"] = (
+            "on_tip" if tip["gap_blocks"] <= ON_TIP_GAP else "catching_up"
+        )
     return tip
 
 
@@ -209,6 +234,7 @@ class NodeOled:
         self._node_rss_peak: Optional[float] = None
         self._status_cache: Dict[str, Any] = {}
         self._status_at = 0.0
+        self._prev_cpu: Optional[List[Tuple[int, int]]] = None
         self.active = False
 
     def _default_should_run(self) -> bool:
@@ -237,6 +263,7 @@ class NodeOled:
         self._slide_idx = 0
         self._status_cache = {}
         self._status_at = 0.0
+        self._prev_cpu = None
 
     def _refresh_status(self) -> Dict[str, Any]:
         now = time.monotonic()
@@ -254,6 +281,25 @@ class NodeOled:
         self._status_cache = {"local": st, "job": job}
         self._status_at = now
         return self._status_cache
+
+    def _core_pct(self) -> List[float]:
+        cur = _read_cpu_times()
+        if not cur:
+            return []
+        prev = self._prev_cpu
+        self._prev_cpu = cur
+        if not prev or len(prev) != len(cur):
+            return [0.0] * len(cur)
+        out: List[float] = []
+        for (idle0, tot0), (idle1, tot1) in zip(prev, cur):
+            dt = tot1 - tot0
+            di = idle1 - idle0
+            if dt <= 0:
+                out.append(0.0)
+            else:
+                busy = max(0.0, min(1.0, 1.0 - (di / float(dt))))
+                out.append(round(100.0 * busy, 1))
+        return out
 
     def _sample(self) -> Dict[str, Any]:
         load1, load5, load15 = _read_load()
@@ -287,12 +333,20 @@ class NodeOled:
             tip["block_no"] = tip["block_no"] or run.get("block_no")
             tip["slot"] = tip["slot"] or run.get("slot")
             tip["gap_blocks"] = run.get("gap_blocks", tip.get("gap_blocks"))
-            tip["phase"] = run.get("phase") or tip.get("phase")
             net = run.get("network_tip") or {}
             if net.get("block_no") is not None:
                 tip["network_block"] = net.get("block_no")
+        # Recompute on-tip with OLED tolerance (helper may still say catching_up).
+        gap = tip.get("gap_blocks")
+        if gap is not None:
+            tip["phase"] = "on_tip" if int(gap) <= ON_TIP_GAP else "catching_up"
+        elif run.get("phase") in ("on_tip", "near_tip"):
+            tip["phase"] = "on_tip"
+        elif run.get("phase"):
+            tip["phase"] = run.get("phase")
         return {
             "load": (load1, load5, load15),
+            "cores": self._core_pct(),
             "temps": temps,
             "mem_total": total,
             "mem_avail": avail,
@@ -313,22 +367,33 @@ class NodeOled:
         if job.get("running"):
             op = str(job.get("op") or "job")
             detail = str(job.get("detail") or "")[:18]
-            return f"3.x {op}", detail or "working…", "Nodes"
+            return f"3.x {op}", detail or "working…", "Amaru"
         if local.get("bootstrap_active") in ("activating", "active"):
             prog = local.get("progress") or {}
             mib = prog.get("downloaded_mib") or prog.get("delta_mib")
             line = f"{mib} MiB" if mib is not None else "Mithril…"
-            return "3.2 Bootstrap", str(line), "Nodes"
+            return "3.2 Bootstrap", str(line), "Amaru"
         if local.get("service_active") == "active":
             gap = tip.get("gap_blocks")
-            if tip.get("phase") == "near_tip":
-                return "3.3 Near tip", (f"−{gap}" if gap is not None else "synced"), "Nodes"
-            return "3.3 Catch-up", (f"−{gap} blk" if gap is not None else "syncing"), "Nodes"
+            if tip.get("phase") == "on_tip" or (
+                gap is not None and int(gap) <= ON_TIP_GAP
+            ):
+                # Small gaps are normal; confirm health instead of alarming.
+                if gap is None or int(gap) == 0:
+                    sub = "synced"
+                else:
+                    sub = f"ok Δ{int(gap)}"
+                return "3.3 On tip", sub, "Amaru"
+            return (
+                "3.3 Catch-up",
+                (f"−{int(gap)} blk" if gap is not None else "syncing"),
+                "Amaru",
+            )
         if local.get("installed"):
             if local.get("db_present") or local.get("bootstrap_done"):
-                return "3.3 Ready", "Start Amaru", "Nodes"
-            return "3.2 Ready", "Bootstrap DB", "Nodes"
-        return "3.1 Install", "Amaru .deb", "Nodes"
+                return "3.3 Ready", "Start Amaru", "Amaru"
+            return "3.2 Ready", "Bootstrap DB", "Amaru"
+        return "3.1 Install", "Amaru .deb", "Amaru"
 
     def _slides(self, sample: Dict[str, Any]) -> List[Dict[str, Any]]:
         title, line2, line3 = self._phase_label(sample)
@@ -337,7 +402,9 @@ class NodeOled:
         temps = sample.get("temps") or {}
         cpu_t = temps.get("cpu-thermal")
         gpu_t = temps.get("gpu-thermal")
+        cores = list(sample.get("cores") or [])
         slides: List[Dict[str, Any]] = [
+            {"kind": "logo"},
             {
                 "kind": "progress",
                 "title": title,
@@ -352,6 +419,7 @@ class NodeOled:
                 "cpu_c": cpu_t,
                 "gpu_c": gpu_t,
                 "nproc": os.cpu_count(),
+                "cores": cores,
             },
             {
                 "kind": "memory",
@@ -367,6 +435,7 @@ class NodeOled:
                 "block_no": tip.get("block_no"),
                 "slot": tip.get("slot"),
                 "gap_blocks": tip.get("gap_blocks"),
+                "phase": tip.get("phase"),
                 "prev_block_no": self._last_tip_block,
                 "animate": bool(
                     tip.get("block_no") is not None

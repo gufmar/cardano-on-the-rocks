@@ -3,14 +3,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
 from . import SOURCE_URL, __version__
 from .protocol import DisplayMessage
 
 log = logging.getLogger("cot_r_display.renderer")
+
+_ASSETS = Path(__file__).resolve().parent / "assets"
+_AMARU_MARK_JSON = _ASSETS / "amaru-mark-48.json"
 
 
 class NullDevice:
@@ -404,36 +409,137 @@ class Renderer:
         except (TypeError, ValueError):
             return "—"
 
-    def _draw_iso_block(self, draw: Any, *, cx: int, cy: int, label: str, ox: int = 0) -> None:
-        """Simple isometric-ish block; ox shifts the whole glyph (tip slide-in)."""
-        # Face
-        x0 = cx - 18 + ox
-        y0 = cy - 8
-        w, h = 36, 22
-        # Top parallelogram
+    def _load_amaru_mark(self) -> Optional[dict]:
+        try:
+            data = json.loads(_AMARU_MARK_JSON.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("amaru mark missing: %s", e)
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data
+
+    def _blit_bitmap(
+        self,
+        draw: Any,
+        mark: dict,
+        *,
+        ox: int,
+        oy: int,
+    ) -> None:
+        w = int(mark.get("width") or 0)
+        h = int(mark.get("height") or 0)
+        rows: List[str] = list(mark.get("rows") or [])
+        if w <= 0 or h <= 0 or len(rows) != h:
+            return
+        for y, hexrow in enumerate(rows):
+            try:
+                raw = bytes.fromhex(hexrow)
+            except ValueError:
+                continue
+            for x in range(w):
+                byte = raw[x // 8] if x // 8 < len(raw) else 0
+                bit = (byte >> (7 - (x % 8))) & 1
+                if bit:
+                    draw.point((ox + x, oy + y), fill="white")
+
+    def _draw_iso_block_small(self, draw: Any, *, x0: int, y0: int, ox: int = 0) -> None:
+        """Compact isometric block glyph (no text inside)."""
+        x = x0 + ox
+        y = y0
+        w, h, d = 18, 14, 4
         top = [
-            (x0 + 6, y0),
-            (x0 + w + 6, y0),
-            (x0 + w, y0 + 6),
-            (x0, y0 + 6),
+            (x + d, y),
+            (x + w + d, y),
+            (x + w, y + d),
+            (x, y + d),
         ]
         draw.polygon(top, outline="white", fill="black")
-        # Front face
-        draw.rectangle((x0, y0 + 6, x0 + w, y0 + 6 + h), outline="white", fill="black")
-        # Right side
+        draw.rectangle((x, y + d, x + w, y + d + h), outline="white", fill="black")
         side = [
-            (x0 + w, y0 + 6),
-            (x0 + w + 6, y0),
-            (x0 + w + 6, y0 + h),
-            (x0 + w, y0 + 6 + h),
+            (x + w, y + d),
+            (x + w + d, y),
+            (x + w + d, y + h),
+            (x + w, y + d + h),
         ]
         draw.polygon(side, outline="white", fill="black")
-        small = self._small_font(10)
-        text = (label or "")[:8]
+
+    def _draw_cpu_core_bars(
+        self,
+        draw: Any,
+        cores: Sequence[float],
+        *,
+        x0: int,
+        y0: int,
+        bar_w: int,
+        bar_h: int,
+        gap: int,
+    ) -> None:
+        for i, pct in enumerate(cores):
+            x = x0 + i * (bar_w + gap)
+            # Outer border = 100% capacity.
+            draw.rectangle((x, y0, x + bar_w, y0 + bar_h), outline="white", fill="black")
+            try:
+                p = float(pct)
+            except (TypeError, ValueError):
+                p = 0.0
+            fill_h = int(round(bar_h * max(0.0, min(1.0, p / 100.0))))
+            if fill_h <= 0:
+                continue
+            # Inset fill so the border stays visible.
+            draw.rectangle(
+                (x + 1, y0 + bar_h - fill_h, x + bar_w - 1, y0 + bar_h - 1),
+                outline="white",
+                fill="white",
+            )
+
+    def _draw_mem_bars(
+        self,
+        draw: Any,
+        *,
+        os_used: Optional[float],
+        os_total: Optional[float],
+        node_rss: Optional[float],
+        node_running: bool,
+    ) -> None:
+        small = self._small_font(11)
+        total = float(os_total or 0.0) or 4096.0
+        os_u = float(os_used or 0.0)
+        node = float(node_rss or 0.0) if node_running else 0.0
+
+        def mlabel(v: float) -> str:
+            if v >= 1024:
+                return f"{v / 1024.0:.1f}G"
+            return f"{int(round(v))}M"
+
+        top = f"Mem OS {mlabel(os_u)}/{mlabel(total)}"
+        bot = (
+            f"Mem Node {mlabel(node)}"
+            if node_running
+            else "Mem Node stopped"
+        )
         if small is not None:
-            draw.text((x0 + 4, y0 + 10), text, font=small, fill="white")
+            draw.text((2, 1), top[:21], font=small, fill="white")
+            draw.text((2, 52), bot[:21], font=small, fill="white")
         else:
-            draw.text((x0 + 4, y0 + 12), text, fill="white")
+            draw.text((2, 1), top[:21], fill="white")
+            draw.text((2, 52), bot[:21], fill="white")
+
+        # Outer border = full board RAM.
+        x0, y0, x1, y1 = 2, 16, 125, 48
+        draw.rectangle((x0, y0, x1, y1), outline="white", fill="black")
+        inner_w = x1 - x0 - 4
+        os_fill = int(round(inner_w * max(0.0, min(1.0, os_u / total))))
+        node_fill = int(round(inner_w * max(0.0, min(1.0, node / total))))
+        # Two stacked bars inside the border.
+        if os_fill > 0:
+            draw.rectangle((x0 + 2, y0 + 3, x0 + 2 + os_fill, y0 + 14), outline="white", fill="white")
+        if node_fill > 0:
+            draw.rectangle(
+                (x0 + 2, y0 + 18, x0 + 2 + node_fill, y1 - 3),
+                outline="white",
+                fill="white",
+            )
 
     def draw_node_slide(self, payload: dict) -> None:
         """Wizard Nodes OLED slides (128×64)."""
@@ -441,39 +547,32 @@ class Renderer:
         if kind == "tip":
             self._draw_tip_slide(payload)
             return
+        if kind == "logo":
+            self._draw_logo_slide()
+            return
+        if kind == "cpu":
+            self._draw_cpu_slide(payload)
+            return
+        if kind == "memory":
+            with self._canvas() as draw:
+                draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+                self._draw_mem_bars(
+                    draw,
+                    os_used=payload.get("os_used"),
+                    os_total=payload.get("os_total"),
+                    node_rss=payload.get("node_rss"),
+                    node_running=bool(payload.get("node_running")),
+                )
+            return
         small = self._small_font(11)
         big = self._small_font(13)
         with self._canvas() as draw:
             draw.rectangle(self.device.bounding_box, outline="black", fill="black")
             if kind == "progress":
                 lines = [
-                    str(payload.get("title") or "Nodes")[:21],
+                    str(payload.get("title") or "Amaru")[:21],
                     str(payload.get("line2") or "")[:21],
                     str(payload.get("line3") or "")[:21],
-                ]
-            elif kind == "cpu":
-                load1 = self._fmt_num(payload.get("load1"))
-                load5 = self._fmt_num(payload.get("load5"))
-                load15 = self._fmt_num(payload.get("load15"))
-                cpu_c = self._fmt_num(payload.get("cpu_c"), 0)
-                gpu_c = self._fmt_num(payload.get("gpu_c"), 0)
-                nproc = payload.get("nproc") or "?"
-                lines = [
-                    f"CPU load /{nproc}",
-                    f"{load1}  {load5}  {load15}",
-                    f"cpu {cpu_c}C  gpu {gpu_c}C",
-                ]
-            elif kind == "memory":
-                os_used = self._fmt_num(payload.get("os_used"), 0)
-                os_peak = self._fmt_num(payload.get("os_peak"), 0)
-                os_total = self._fmt_num(payload.get("os_total"), 0)
-                node = self._fmt_num(payload.get("node_rss"), 0)
-                node_peak = self._fmt_num(payload.get("node_peak"), 0)
-                running = bool(payload.get("node_running"))
-                lines = [
-                    f"OS {os_used}/{os_total}M",
-                    f"peak {os_peak}M",
-                    (f"node {node}M pk {node_peak}M" if running else "node stopped"),
                 ]
             elif kind == "mempool":
                 mp = payload.get("mempool_tx")
@@ -497,48 +596,111 @@ class Renderer:
                     draw.text((2, y), line[:21], fill="white")
                 y += 14 if i == 0 else 13
 
+    def _draw_logo_slide(self) -> None:
+        mark = self._load_amaru_mark()
+        small = self._small_font(12)
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            if mark:
+                w = int(mark.get("width") or 48)
+                h = int(mark.get("height") or 48)
+                ox = max(0, (self.width - w) // 2)
+                oy = max(0, (self.height - h - 12) // 2)
+                self._blit_bitmap(draw, mark, ox=ox, oy=oy)
+            label = "Amaru"
+            if small is not None:
+                # Approximate center for DejaVu ~7px/char at 12pt.
+                tw = len(label) * 7
+                draw.text(
+                    (max(0, (self.width - tw) // 2), 52),
+                    label,
+                    font=small,
+                    fill="white",
+                )
+            else:
+                draw.text((46, 52), label, fill="white")
+
+    def _draw_cpu_slide(self, payload: dict) -> None:
+        small = self._small_font(11)
+        cores = list(payload.get("cores") or [])
+        nproc = int(payload.get("nproc") or len(cores) or 0)
+        cpu_c = self._fmt_num(payload.get("cpu_c"), 0)
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            title = f"CPU {nproc}c  {cpu_c}C"
+            if small is not None:
+                draw.text((2, 1), title[:21], font=small, fill="white")
+            else:
+                draw.text((2, 1), title[:21], fill="white")
+            if not cores and nproc > 0:
+                cores = [0.0] * nproc
+            if not cores:
+                load1 = self._fmt_num(payload.get("load1"))
+                if small is not None:
+                    draw.text((2, 28), f"load {load1}", font=small, fill="white")
+                else:
+                    draw.text((2, 28), f"load {load1}", fill="white")
+                return
+            # Fit bars across 128px with a 100%-height border each.
+            n = len(cores)
+            gap = 2 if n >= 6 else 3
+            bar_w = max(8, min(16, (124 - gap * (n - 1)) // n))
+            total_w = n * bar_w + (n - 1) * gap
+            x0 = max(2, (self.width - total_w) // 2)
+            self._draw_cpu_core_bars(
+                draw, cores, x0=x0, y0=16, bar_w=bar_w, bar_h=42, gap=gap
+            )
+
     def _draw_tip_slide(self, payload: dict) -> None:
         block = payload.get("block_no")
         slot = payload.get("slot")
         gap = payload.get("gap_blocks")
+        phase = str(payload.get("phase") or "")
         prev = payload.get("prev_block_no")
         animate = bool(payload.get("animate")) and block is not None and prev is not None
         label = self._fmt_num(block)
         small = self._small_font(11)
+        num = self._big_font(18) or self._small_font(16) or small
 
-        def paint(ox: int, show_prev: bool = False) -> None:
+        def paint(ox: int) -> None:
             with self._canvas() as draw:
                 draw.rectangle(self.device.bounding_box, outline="black", fill="black")
-                title = "Tip height"
                 if small is not None:
-                    draw.text((2, 1), title, font=small, fill="white")
+                    draw.text((2, 1), "Tip height", font=small, fill="white")
                 else:
-                    draw.text((2, 1), title, fill="white")
-                if show_prev and prev is not None:
-                    self._draw_iso_block(
-                        draw, cx=40, cy=34, label=self._fmt_num(prev), ox=0
-                    )
-                self._draw_iso_block(draw, cx=84, cy=34, label=label, ox=ox)
-                foot = []
-                if gap is not None:
-                    foot.append(f"-{int(gap)}")
+                    draw.text((2, 1), "Tip height", fill="white")
+                # Small block on the left; block number uses most of the width.
+                self._draw_iso_block_small(draw, x0=4, y0=20, ox=ox)
+                tx = 32
+                ty = 22
+                if num is not None:
+                    draw.text((tx, ty), label[:12], font=num, fill="white")
+                else:
+                    draw.text((tx, ty + 4), label[:12], fill="white")
+                foot_bits = []
+                if phase == "on_tip" or (gap is not None and int(gap) <= 300):
+                    if gap is None or int(gap) == 0:
+                        foot_bits.append("on tip")
+                    else:
+                        foot_bits.append(f"on tip Δ{int(gap)}")
+                elif gap is not None:
+                    foot_bits.append(f"−{int(gap)} blk")
                 if slot is not None:
-                    foot.append(f"s{int(slot)}"[-8:])
-                if foot:
-                    txt = " ".join(foot)[:21]
+                    foot_bits.append(f"s{int(slot)}"[-8:])
+                if foot_bits:
+                    txt = " ".join(foot_bits)[:21]
                     if small is not None:
                         draw.text((2, 52), txt, font=small, fill="white")
                     else:
                         draw.text((2, 52), txt, fill="white")
 
         if not animate:
-            paint(0, show_prev=False)
+            paint(0)
             return
-        # Slide new block in from the right (~0.45s).
-        for ox in (48, 32, 18, 8, 0):
-            paint(ox, show_prev=True)
+        for ox in (40, 24, 12, 4, 0):
+            paint(ox)
             time.sleep(0.09)
-        paint(0, show_prev=False)
+        paint(0)
 
     def draw_bitmap(self, payload: dict) -> None:
         w = int(payload.get("width") or 0)
