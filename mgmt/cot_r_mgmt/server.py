@@ -1091,11 +1091,15 @@ class Handler(BaseHTTPRequestHandler):
                 _json_response(self, 200, {**st, "skipped": True})
                 return
             if master:
-                # Pull .deb from master cache over LAN
+                # Pull .deb from master cache over LAN.
+                # Use Amaru cache (writable by cot-r); /run/cot-r is owned by cot-r-display.
                 url = peersmod.peer_url(master, "/api/v1/peer/node/deb")
-                RUN = Path(os.environ.get("COT_R_RUN_DIR", "/run/cot-r"))
-                RUN.mkdir(parents=True, exist_ok=True)
-                dest = RUN / "amaru-from-master.deb"
+                cache = Path(os.environ.get("COT_R_AMARU_CACHE", "/var/cache/cot-r/amaru"))
+                try:
+                    cache.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    pass
+                dest = cache / "amaru-from-master.deb"
                 try:
                     _http_download(url, dest, token=CTX.peer_token, timeout=600)
                 except Exception as e:  # noqa: BLE001
