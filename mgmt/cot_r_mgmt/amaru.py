@@ -510,22 +510,51 @@ def run_snapshot_stream_in(src) -> Dict[str, Any]:
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        bufsize=0,
     )
     assert proc.stdin is not None
+    written = 0
     try:
         while True:
             chunk = src.read(1024 * 1024)
             if not chunk:
                 break
             proc.stdin.write(chunk)
-        proc.stdin.close()
+            written += len(chunk)
+        # Close stdin so tar sees EOF. Do NOT call communicate() afterward:
+        # it flushes stdin again and raises ValueError("flush of closed file").
+        try:
+            proc.stdin.close()
+        finally:
+            proc.stdin = None
     except Exception as e:  # noqa: BLE001
         try:
             proc.kill()
         except OSError:
             pass
-        return {"ok": False, "error": f"stream write failed: {e}"}
-    out_b, err_b = proc.communicate(timeout=7200)
+        try:
+            proc.wait(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "ok": False,
+            "error": f"stream write failed after {written} bytes: {e}",
+            "bytes_written": written,
+        }
+    try:
+        out_b = proc.stdout.read() if proc.stdout else b""
+        err_b = proc.stderr.read() if proc.stderr else b""
+        proc.wait(timeout=7200)
+    except Exception as e:  # noqa: BLE001
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return {
+            "ok": False,
+            "error": f"stream wait failed after {written} bytes: {e}",
+            "bytes_written": written,
+        }
     out = (out_b or b"").decode("utf-8", errors="replace").strip()
     err = (err_b or b"").decode("utf-8", errors="replace").strip()
     if proc.returncode != 0:
@@ -535,6 +564,7 @@ def run_snapshot_stream_in(src) -> Dict[str, Any]:
                     parsed = json.loads(blob)
                     if isinstance(parsed, dict):
                         parsed.setdefault("ok", False)
+                        parsed.setdefault("bytes_written", written)
                         return parsed
                 except json.JSONDecodeError:
                     pass
@@ -542,16 +572,18 @@ def run_snapshot_stream_in(src) -> Dict[str, Any]:
             "ok": False,
             "error": err or out or f"snapshot-stream-in exit {proc.returncode}",
             "exit_code": proc.returncode,
+            "bytes_written": written,
         }
     if not out:
-        return {"ok": True}
+        return {"ok": True, "bytes_written": written}
     try:
         data = json.loads(out)
         if isinstance(data, dict):
+            data.setdefault("bytes_written", written)
             return data
-        return {"ok": True, "data": data}
+        return {"ok": True, "data": data, "bytes_written": written}
     except json.JSONDecodeError:
-        return {"ok": True, "raw": out}
+        return {"ok": True, "raw": out, "bytes_written": written}
 
 
 def deb_path(version: Optional[str] = None) -> Dict[str, Any]:
