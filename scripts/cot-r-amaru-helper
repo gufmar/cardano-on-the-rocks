@@ -445,14 +445,20 @@ try:
 except Exception:
     raw = ""
 
+# Local adopted tip vs peer-advertised network tip must not be mixed.
+# tip.adopt.max_block_height and chain.tip_accepted.tip are LOCAL chain tips.
+# Peer network tip comes from chainsync.roll_forward_done tip/highest/tip_height
+# (and peer tip fields that sit clearly ahead of local).
 local = None
 net = None
+headers_max = None  # tip.adopt max_block_height (headers ahead of adopted)
 peer_hits = Counter()
 peer_last = {}
 event_counts = Counter()
 recent = []
 interesting = {
     "tip.adopt",
+    "tip.update",
     "block.adopted",
     "block.received",
     "chainsync.roll_forward_done",
@@ -462,6 +468,41 @@ interesting = {
     "chain.resume_fetch",
     "perf.header.lifecycle",
 }
+
+
+def better_tip(a, b):
+    """Return the tip with higher block_no, then higher slot (high-water)."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    ab, bb = a.get("block_no"), b.get("block_no")
+    if ab is not None and bb is not None and bb != ab:
+        return b if bb > ab else a
+    aslot, bslot = a.get("slot"), b.get("slot")
+    if aslot is not None and bslot is not None and bslot != aslot:
+        return b if bslot > aslot else a
+    return b
+
+
+def as_local(pt=None, slot=None, block=None, header_hash=None, point=None):
+    tip = {
+        "slot": slot,
+        "block_no": block,
+        "header_hash": header_hash if isinstance(header_hash, str) else None,
+        "point": point,
+    }
+    if pt:
+        tip = {
+            "slot": pt.get("slot") if tip["slot"] is None else tip["slot"],
+            "block_no": pt.get("block_no") if tip["block_no"] is None else tip["block_no"],
+            "header_hash": tip["header_hash"] or pt.get("header_hash"),
+            "point": tip["point"] if tip["point"] is not None else pt.get("point"),
+        }
+    if tip["slot"] is None and tip["block_no"] is None:
+        return None
+    return tip
+
 
 for line in raw.splitlines():
     s = line.strip()
@@ -484,60 +525,84 @@ for line in raw.splitlines():
         elif peer not in peer_last:
             peer_last[peer] = name or "seen"
 
-    for key in ("point", "current"):
-        pt = point_tuple(fields.get(key))
-        if pt and pt.get("slot") is not None:
-            local = pt
-    if fields.get("slot") is not None and fields.get("block_height") is not None:
-        try:
-            local = {
-                "slot": int(fields["slot"]),
-                "block_no": int(fields["block_height"]),
-                "header_hash": fields.get("header_hash")
-                if isinstance(fields.get("header_hash"), str)
-                else (local or {}).get("header_hash"),
-                "point": None,
-            }
-        except Exception:
-            pass
-    if fields.get("current_height") is not None and local:
-        try:
-            local["block_no"] = int(fields["current_height"])
-        except Exception:
-            pass
+    hh = fields.get("header_hash") if isinstance(fields.get("header_hash"), str) else None
 
-    for key in ("tip", "highest"):
-        pt = point_tuple(fields.get(key))
-        if pt and pt.get("slot") is not None:
-            net = pt
-    if fields.get("tip_height") is not None and net:
+    # --- local adopted / chain tip ---
+    if name in ("tip.adopt", "tip.update"):
         try:
-            net["block_no"] = int(fields["tip_height"])
+            local = better_tip(
+                local,
+                as_local(
+                    slot=int(fields["slot"]) if fields.get("slot") is not None else None,
+                    block=int(fields["block_height"])
+                    if fields.get("block_height") is not None
+                    else None,
+                    header_hash=hh,
+                ),
+            )
         except Exception:
             pass
-    if fields.get("max_block_height") is not None:
-        try:
-            mb = int(fields["max_block_height"])
-            if not net:
-                net = {
-                    "slot": None,
-                    "block_no": mb,
-                    "header_hash": None,
-                    "point": None,
-                }
-            else:
-                net["block_no"] = mb
-        except Exception:
-            pass
+        if fields.get("max_block_height") is not None:
+            try:
+                mh = int(fields["max_block_height"])
+                headers_max = mh if headers_max is None else max(headers_max, mh)
+            except Exception:
+                pass
+    elif name in ("chain.tip_accepted", "chain.best_tip_candidate"):
+        # Their "tip" field is the local chain tip, not the peer network tip.
+        local = better_tip(local, as_local(pt=point_tuple(fields.get("tip")), header_hash=hh))
+    elif name == "chainsync.roll_forward_done":
+        cur = point_tuple(fields.get("current"))
+        if fields.get("current_height") is not None and cur:
+            try:
+                cur["block_no"] = int(fields["current_height"])
+            except Exception:
+                pass
+        local = better_tip(local, as_local(pt=cur, header_hash=hh))
+        # Peer-advertised network tip (stable source).
+        for key in ("highest", "tip"):
+            net = better_tip(net, point_tuple(fields.get(key)))
+        if fields.get("tip_height") is not None:
+            try:
+                th = int(fields["tip_height"])
+                if net is None:
+                    net = {
+                        "slot": None,
+                        "block_no": th,
+                        "header_hash": None,
+                        "point": None,
+                    }
+                else:
+                    net = better_tip(
+                        net,
+                        {
+                            "slot": net.get("slot"),
+                            "block_no": th,
+                            "header_hash": net.get("header_hash"),
+                            "point": net.get("point"),
+                        },
+                    )
+            except Exception:
+                pass
+    else:
+        # point on spans is local work; do not treat span "tip" as network tip
+        # unless it is clearly ahead of local (peer-advertised).
+        pt = point_tuple(fields.get("point"))
+        if pt:
+            local = better_tip(local, as_local(pt=pt, header_hash=hh))
+        tip_pt = point_tuple(fields.get("tip"))
+        if tip_pt and tip_pt.get("block_no") is not None:
+            local_block = (local or {}).get("block_no")
+            # Only accept as network tip when clearly ahead of adopted local.
+            if local_block is None or tip_pt["block_no"] > int(local_block) + 5000:
+                net = better_tip(net, tip_pt)
 
     if name in interesting:
         snap = {
             "message": name,
             "peer": peer if isinstance(peer, str) else None,
             "outcome": fields.get("outcome"),
-            "header_hash": fields.get("header_hash")
-            if isinstance(fields.get("header_hash"), str)
-            else None,
+            "header_hash": hh,
         }
         if local:
             snap["slot"] = local.get("slot")
@@ -555,6 +620,11 @@ if net:
         "block_no": net.get("block_no"),
         "header_hash": net.get("header_hash"),
     }
+out["headers_max_block"] = headers_max
+if headers_max is not None and local and local.get("block_no") is not None:
+    out["headers_ahead"] = max(0, int(headers_max) - int(local["block_no"]))
+else:
+    out["headers_ahead"] = None
 
 gap_blocks = gap_slots = sync_pct = None
 if local and net:
@@ -577,27 +647,31 @@ out["peers"] = [
 out["event_counts"] = {k: int(v) for k, v in event_counts.most_common(20)}
 out["recent"] = recent[-8:]
 
-if local and local.get("slot") is not None:
+if local and (local.get("slot") is not None or local.get("block_no") is not None):
     near = False
     if gap_blocks is not None and gap_blocks <= 50:
         near = True
     if gap_slots is not None and gap_slots <= 400:
         near = True
     out["phase"] = "near_tip" if near else "catching_up"
-    bits = [f"slot {local['slot']}"]
+    bits = []
+    if local.get("slot") is not None:
+        bits.append(f"slot {local['slot']}")
     if local.get("block_no") is not None:
         bits.append(f"block {local['block_no']}")
     if gap_blocks is not None:
-        bits.append(f"{gap_blocks} blocks behind tip")
+        bits.append(f"{gap_blocks} blocks behind peer tip")
     elif gap_slots is not None:
-        bits.append(f"{gap_slots} slots behind tip")
+        bits.append(f"{gap_slots} slots behind peer tip")
+    if out.get("headers_ahead"):
+        bits.append(f"{out['headers_ahead']} headers buffered ahead of adopted tip")
     if near:
         out["detail"] = (
-            "Node start success. Near network tip (" + ", ".join(bits) + ")."
+            "Node start success. Near peer network tip (" + ", ".join(bits) + ")."
         )
     else:
         out["detail"] = (
-            "Node start success. Catching up from snapshot toward live tip ("
+            "Node start success. Catching up from snapshot toward peer tip ("
             + ", ".join(bits)
             + "). CPU stays high until near tip."
         )
@@ -850,6 +924,83 @@ cmd_env_write() {
   cmd_env_get
 }
 
+# Upsert KEY=VALUE in /etc/default/amaru (preserve other lines / comments).
+env_upsert() {
+  local key="$1" val="$2"
+  python3 - "${AMARU_ENV_FILE}" "$key" "$val" <<'PY'
+import sys
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+except FileNotFoundError:
+    lines = []
+out = []
+found = False
+for line in lines:
+    s = line.strip()
+    if s and not s.startswith("#") and "=" in s and s.split("=", 1)[0].strip() == key:
+        out.append(f"{key}={val}")
+        found = True
+    else:
+        out.append(line)
+if not found:
+    if out and out[-1].strip():
+        out.append("")
+    out.append(f"# cot-r catch-up tune")
+    out.append(f"{key}={val}")
+text = "\n".join(out) + "\n"
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
+}
+
+# RockPi 4 GiB catch-up: quiet default DEBUG consensus/ledger JSON spam; raise MemoryHigh.
+cmd_tune_catchup() {
+  local restart="${1:-1}"
+  package_installed || { echo '{"ok":false,"error":"amaru not installed"}' >&2; exit 1; }
+  [[ -f "${AMARU_ENV_FILE}" ]] || { echo '{"ok":false,"error":"env file missing"}' >&2; exit 1; }
+
+  # Binary default is info + amaru::consensus=debug + amaru::ledger=debug → huge span enter/exit volume.
+  env_upsert AMARU_LOG "info"
+  env_upsert AMARU_TUI_OFF "true"
+  # Keep JSON traces so wizard observe can still read tip.adopt / chainsync at info.
+  env_upsert AMARU_WITH_JSON_TRACES "true"
+
+  local drop_dir="/etc/systemd/system/amaru.service.d"
+  mkdir -p "${drop_dir}"
+  cat >"${drop_dir}/50-cot-r-catchup.conf" <<'EOF'
+# Managed by cot-r-amaru-helper tune-catchup
+# Upstream unit sets MemoryHigh=1G; on 4 GiB RockPi that reclaim-throttles hard during sync.
+[Service]
+MemoryHigh=2G
+EOF
+
+  systemctl daemon-reload
+  local restarted="false"
+  if [[ "$restart" == "1" || "$restart" == "true" || "$restart" == "yes" ]]; then
+    systemctl restart "${AMARU_SERVICE}"
+    restarted="true"
+  fi
+
+  python3 -c 'import json,sys
+print(json.dumps({
+  "ok": True,
+  "restarted": sys.argv[1] == "true",
+  "applied": {
+    "AMARU_LOG": "info",
+    "AMARU_TUI_OFF": "true",
+    "AMARU_WITH_JSON_TRACES": "true",
+    "MemoryHigh": "2G",
+  },
+  "notes": [
+    "Default Amaru log filter enables consensus/ledger DEBUG (span enter/exit flood into journald).",
+    "Upstream amaru.service MemoryHigh=1G was reclaim-throttling on this board.",
+    "Optional later: raise AMARU_PEERS_MAX_UPSTREAM (e.g. 6) if uplink and RAM allow.",
+  ],
+}))' "$restarted"
+}
+
 cmd_service() {
   local action="$1"
   case "$action" in
@@ -943,6 +1094,7 @@ Usage: cot-r-amaru-helper <command> [args]
   wipe
   env-get
   env-write <staging-file-under-/run/cot-r>
+  tune-catchup [restart=1]
   service-start|service-stop|service-restart
   enable-autostart|disable-autostart
   snapshot-export <path>
@@ -963,6 +1115,7 @@ main() {
     wipe) cmd_wipe ;;
     env-get) cmd_env_get ;;
     env-write) cmd_env_write "${1:-}" ;;
+    tune-catchup) cmd_tune_catchup "${1:-1}" ;;
     service-start) cmd_service start ;;
     service-stop) cmd_service stop ;;
     service-restart) cmd_service restart ;;

@@ -978,6 +978,19 @@ class Handler(BaseHTTPRequestHandler):
             result = amarumod.service(str((body or {}).get("action") or ""))
             _json_response(self, 200 if result.get("ok") else 400, result)
             return
+        if path == "/api/v1/wizard/node/tune-catchup":
+            if not self._require_wizard_session():
+                return
+            body, err = _read_json(self)
+            if err:
+                _json_response(self, 400, {"ok": False, "error": err})
+                return
+            restart = True
+            if body is not None and "restart" in body:
+                restart = bool(body.get("restart"))
+            result = amarumod.tune_catchup(restart=restart)
+            _json_response(self, 200 if result.get("ok") else 500, result)
+            return
         if path == "/api/v1/wizard/node/autostart":
             if not self._require_wizard_session():
                 return

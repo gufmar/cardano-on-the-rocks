@@ -370,6 +370,15 @@ def service(action: str) -> Dict[str, Any]:
     return run_helper(f"service-{action}", timeout=60.0)
 
 
+def tune_catchup(restart: bool = True) -> Dict[str, Any]:
+    """Quiet DEBUG journal spam + raise MemoryHigh for RockPi catch-up."""
+    return run_helper(
+        "tune-catchup",
+        "1" if restart else "0",
+        timeout=90.0,
+    )
+
+
 def set_autostart(enabled: bool) -> Dict[str, Any]:
     return run_helper(
         "enable-autostart" if enabled else "disable-autostart",
