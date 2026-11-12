@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, List, Optional, Sequence, Tuple
 
 from . import SOURCE_URL, __version__
@@ -129,6 +130,9 @@ class Renderer:
             return
         if cmd == "onboarding":
             self.draw_onboarding(msg.payload)
+            return
+        if cmd == "node_slide":
+            self.draw_node_slide(msg.payload)
             return
         if cmd == "bitmap":
             # payload: width, height, rows as list of hex strings (1 bit/pixel MSB)
@@ -390,6 +394,152 @@ class Renderer:
                         draw.text((2, ty), str(line)[:18], fill="white")
                     ty += 12
 
+    def _fmt_num(self, value: Any, digits: int = 1) -> str:
+        if value is None:
+            return "—"
+        try:
+            if isinstance(value, float):
+                return f"{value:.{digits}f}"
+            return str(int(value))
+        except (TypeError, ValueError):
+            return "—"
+
+    def _draw_iso_block(self, draw: Any, *, cx: int, cy: int, label: str, ox: int = 0) -> None:
+        """Simple isometric-ish block; ox shifts the whole glyph (tip slide-in)."""
+        # Face
+        x0 = cx - 18 + ox
+        y0 = cy - 8
+        w, h = 36, 22
+        # Top parallelogram
+        top = [
+            (x0 + 6, y0),
+            (x0 + w + 6, y0),
+            (x0 + w, y0 + 6),
+            (x0, y0 + 6),
+        ]
+        draw.polygon(top, outline="white", fill="black")
+        # Front face
+        draw.rectangle((x0, y0 + 6, x0 + w, y0 + 6 + h), outline="white", fill="black")
+        # Right side
+        side = [
+            (x0 + w, y0 + 6),
+            (x0 + w + 6, y0),
+            (x0 + w + 6, y0 + h),
+            (x0 + w, y0 + 6 + h),
+        ]
+        draw.polygon(side, outline="white", fill="black")
+        small = self._small_font(10)
+        text = (label or "")[:8]
+        if small is not None:
+            draw.text((x0 + 4, y0 + 10), text, font=small, fill="white")
+        else:
+            draw.text((x0 + 4, y0 + 12), text, fill="white")
+
+    def draw_node_slide(self, payload: dict) -> None:
+        """Wizard Nodes OLED slides (128×64)."""
+        kind = str(payload.get("kind") or "progress")
+        if kind == "tip":
+            self._draw_tip_slide(payload)
+            return
+        small = self._small_font(11)
+        big = self._small_font(13)
+        with self._canvas() as draw:
+            draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+            if kind == "progress":
+                lines = [
+                    str(payload.get("title") or "Nodes")[:21],
+                    str(payload.get("line2") or "")[:21],
+                    str(payload.get("line3") or "")[:21],
+                ]
+            elif kind == "cpu":
+                load1 = self._fmt_num(payload.get("load1"))
+                load5 = self._fmt_num(payload.get("load5"))
+                load15 = self._fmt_num(payload.get("load15"))
+                cpu_c = self._fmt_num(payload.get("cpu_c"), 0)
+                gpu_c = self._fmt_num(payload.get("gpu_c"), 0)
+                nproc = payload.get("nproc") or "?"
+                lines = [
+                    f"CPU load /{nproc}",
+                    f"{load1}  {load5}  {load15}",
+                    f"cpu {cpu_c}C  gpu {gpu_c}C",
+                ]
+            elif kind == "memory":
+                os_used = self._fmt_num(payload.get("os_used"), 0)
+                os_peak = self._fmt_num(payload.get("os_peak"), 0)
+                os_total = self._fmt_num(payload.get("os_total"), 0)
+                node = self._fmt_num(payload.get("node_rss"), 0)
+                node_peak = self._fmt_num(payload.get("node_peak"), 0)
+                running = bool(payload.get("node_running"))
+                lines = [
+                    f"OS {os_used}/{os_total}M",
+                    f"peak {os_peak}M",
+                    (f"node {node}M pk {node_peak}M" if running else "node stopped"),
+                ]
+            elif kind == "mempool":
+                mp = payload.get("mempool_tx")
+                last_tx = payload.get("last_block_tx")
+                block = payload.get("block_no")
+                lines = [
+                    "Mempool",
+                    f"pending {self._fmt_num(mp)}" if mp is not None else "pending n/a",
+                    f"blk txs {self._fmt_num(last_tx)}"
+                    + (f" @{self._fmt_num(block)}" if block is not None else ""),
+                ]
+            else:
+                lines = [kind[:21], "unknown slide"]
+
+            y = 4
+            for i, line in enumerate(lines[:4]):
+                font = big if i == 0 else small
+                if font is not None:
+                    draw.text((2, y), line[:21], font=font, fill="white")
+                else:
+                    draw.text((2, y), line[:21], fill="white")
+                y += 14 if i == 0 else 13
+
+    def _draw_tip_slide(self, payload: dict) -> None:
+        block = payload.get("block_no")
+        slot = payload.get("slot")
+        gap = payload.get("gap_blocks")
+        prev = payload.get("prev_block_no")
+        animate = bool(payload.get("animate")) and block is not None and prev is not None
+        label = self._fmt_num(block)
+        small = self._small_font(11)
+
+        def paint(ox: int, show_prev: bool = False) -> None:
+            with self._canvas() as draw:
+                draw.rectangle(self.device.bounding_box, outline="black", fill="black")
+                title = "Tip height"
+                if small is not None:
+                    draw.text((2, 1), title, font=small, fill="white")
+                else:
+                    draw.text((2, 1), title, fill="white")
+                if show_prev and prev is not None:
+                    self._draw_iso_block(
+                        draw, cx=40, cy=34, label=self._fmt_num(prev), ox=0
+                    )
+                self._draw_iso_block(draw, cx=84, cy=34, label=label, ox=ox)
+                foot = []
+                if gap is not None:
+                    foot.append(f"-{int(gap)}")
+                if slot is not None:
+                    foot.append(f"s{int(slot)}"[-8:])
+                if foot:
+                    txt = " ".join(foot)[:21]
+                    if small is not None:
+                        draw.text((2, 52), txt, font=small, fill="white")
+                    else:
+                        draw.text((2, 52), txt, fill="white")
+
+        if not animate:
+            paint(0, show_prev=False)
+            return
+        # Slide new block in from the right (~0.45s).
+        for ox in (48, 32, 18, 8, 0):
+            paint(ox, show_prev=True)
+            time.sleep(0.09)
+        paint(0, show_prev=False)
+
     def draw_bitmap(self, payload: dict) -> None:
         w = int(payload.get("width") or 0)
         h = int(payload.get("height") or 0)
@@ -435,4 +585,7 @@ class _NullDraw:
         return None
 
     def ellipse(self, *args, **kwargs):
+        return None
+
+    def polygon(self, *args, **kwargs):
         return None

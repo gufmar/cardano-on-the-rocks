@@ -158,6 +158,7 @@ curl -sS --fail-with-body -X POST -H "Authorization: Bearer $TOKEN" \
 | [docs/architecture.md](docs/architecture.md) | Components and state model |
 | [docs/networking.md](docs/networking.md) | LAN, mAP, AP bridging plans |
 | [docs/oled.md](docs/oled.md) | I²C7, display service, QR limits |
+| [docs/oled-node-slides.md](docs/oled-node-slides.md) | Nodes 3.x OLED carousel (CPU/mem/tip) |
 | [docs/provisioning.md](docs/provisioning.md) | Prepare / reset behaviour |
 | [docs/deployment.md](docs/deployment.md) | Deploy user, update, rollback |
 | [docs/ap-bridging.md](docs/ap-bridging.md) | Bridged AP design |

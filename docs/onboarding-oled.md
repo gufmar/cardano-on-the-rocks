@@ -58,6 +58,10 @@ sudo ./scripts/cot-r ap-show-psk   # optional: confirm new PSK
 
 Waiting peers (stage 8) stop hostapd and show “Waiting for setup…” instead.
 
+After the phone confirms setup and enters **Nodes (3.x)**, the OLED hands off to
+a rotating status carousel (progress / CPU / memory / tip / mempool). See
+[oled-node-slides.md](oled-node-slides.md).
+
 ## Why this replaces a mAP captive portal
 
 The phone already has L2 connectivity on the bridged LAN after scanning step 1.

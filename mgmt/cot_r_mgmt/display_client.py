@@ -97,3 +97,20 @@ def show_onboarding(
             "payload": payload,
         }
     )
+
+
+def show_node_slide(
+    payload: Dict[str, Any],
+    *,
+    priority: int = 72,
+    ttl_ms: int = 4000,
+) -> None:
+    """One Nodes (3.x) OLED slide: progress / cpu / memory / tip / mempool."""
+    send(
+        {
+            "cmd": "node_slide",
+            "priority": priority,
+            "ttl_ms": ttl_ms,
+            "payload": dict(payload or {}),
+        }
+    )

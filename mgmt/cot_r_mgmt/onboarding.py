@@ -163,19 +163,21 @@ class OnboardingDisplay:
 
         wiz = self.wizard.snapshot()
         if wiz.get("ui_step", STEP_WIFI_QR) >= STEP_CONFIGURING or wiz.get("confirmed"):
-            display_client.show_onboarding(
-                step=STEP_CONFIGURING,
-                digit="3",
-                lines=["setup"],
-                qr_data="",
-                qr_side="right",
-                controlled_by=wiz.get("controlled_by"),
-                priority=70,
-                ttl_ms=60000,
-            )
+            # Nodes 3.x OLED carousel (NodeOled) owns the panel from here.
+            # Keep a one-shot gear flash only until the carousel starts pushing.
             if self._last_step != STEP_CONFIGURING:
+                display_client.show_onboarding(
+                    step=STEP_CONFIGURING,
+                    digit="3",
+                    lines=["nodes"],
+                    qr_data="",
+                    qr_side="right",
+                    controlled_by=wiz.get("controlled_by"),
+                    priority=70,
+                    ttl_ms=4000,
+                )
                 log.info(
-                    "onboarding step=3 board=%s role=%s ctr=%s",
+                    "onboarding step=3 board=%s role=%s ctr=%s (handoff to node OLED)",
                     board_digit(),
                     wiz.get("role"),
                     wiz.get("controlled_by"),

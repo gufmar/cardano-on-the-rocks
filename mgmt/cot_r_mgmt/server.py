@@ -56,6 +56,7 @@ from cot_r_mgmt import routeros as ros  # noqa: E402
 from cot_r_mgmt import amaru as amarumod  # noqa: E402
 from cot_r_mgmt.association import AssociationTracker  # noqa: E402
 from cot_r_mgmt.coordinator import CoordinatorService  # noqa: E402
+from cot_r_mgmt.node_oled import NodeOled  # noqa: E402
 from cot_r_mgmt.onboarding import OnboardingDisplay, board_digit  # noqa: E402
 from cot_r_mgmt import peers as peersmod  # noqa: E402
 from cot_r_mgmt.state import StateStore  # noqa: E402
@@ -101,6 +102,7 @@ class AppContext:
             wizard=self.wizard,
         )
         self.onboarding = OnboardingDisplay(store=self.store, wizard=self.wizard)
+        self.node_oled = NodeOled(wizard=self.wizard)
         self.associations = AssociationTracker(
             device_id=self.device_id,
             device_label=self.device_label,
@@ -1225,6 +1227,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 pass
             CTX.onboarding.reset_wizard()
+            CTX.node_oled.reset_peaks()
             _json_response(
                 self,
                 200,
@@ -1286,6 +1289,7 @@ def main() -> int:
     )
     CTX.coord.start()
     CTX.onboarding.start()
+    CTX.node_oled.start()
     CTX.associations.start()
 
     httpd = ThreadingHTTPServer((bind, port), Handler)
@@ -1294,6 +1298,7 @@ def main() -> int:
     def _stop(*_a):
         log.info("shutdown requested")
         CTX.associations.stop()
+        CTX.node_oled.stop()
         CTX.onboarding.stop()
         CTX.coord.stop()
         threading.Thread(target=httpd.shutdown, daemon=True).start()
@@ -1305,6 +1310,7 @@ def main() -> int:
         httpd.serve_forever(poll_interval=0.5)
     finally:
         CTX.associations.stop()
+        CTX.node_oled.stop()
         CTX.onboarding.stop()
         CTX.coord.stop()
         httpd.server_close()
