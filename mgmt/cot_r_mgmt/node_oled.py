@@ -119,8 +119,25 @@ def _proc_rss_hwm_mb(pid: int) -> Tuple[Optional[float], Optional[float]]:
         return None, None
 
 
+def _point_block_slot(raw: Any) -> Tuple[Optional[int], Optional[int]]:
+    """Parse Amaru [slot, hash, block] tuples."""
+    if not isinstance(raw, list) or not raw:
+        return None, None
+    slot = block = None
+    try:
+        slot = int(raw[0])
+    except (TypeError, ValueError):
+        slot = None
+    if len(raw) > 2:
+        try:
+            block = int(raw[2])
+        except (TypeError, ValueError):
+            block = None
+    return slot, block
+
+
 def _journal_tip() -> Dict[str, Any]:
-    """Parse recent Amaru tip events (filtered) for OLED."""
+    """Parse recent Amaru tip events (filtered) for OLED /status."""
     import json
     import subprocess
 
@@ -132,25 +149,45 @@ def _journal_tip() -> Dict[str, Any]:
         "tx_count": None,
         "phase": None,
     }
-    try:
-        raw = subprocess.check_output(
-            [
-                "journalctl",
-                "-u",
-                AMARU_UNIT,
-                "-n",
-                "400",
-                "-o",
-                "cat",
-                "--no-pager",
-                "--grep",
-                r"tip\.(adopt|update)|chainsync\.roll_forward_done",
-            ],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=3.0,
-        )
-    except (OSError, subprocess.SubprocessError):
+    raw = ""
+    for cmd in (
+        [
+            "journalctl",
+            "-u",
+            AMARU_UNIT,
+            "-n",
+            "1500",
+            "-o",
+            "cat",
+            "--no-pager",
+            "--grep",
+            r"tip\.(adopt|update)|chainsync\.(roll_forward_done|intersect_found|roll_backward)|chain\.(tip_accepted|best_tip_candidate)",
+        ],
+        [
+            "journalctl",
+            "-u",
+            AMARU_UNIT,
+            "-n",
+            "400",
+            "-p",
+            "info..alert",
+            "-o",
+            "cat",
+            "--no-pager",
+        ],
+    ):
+        try:
+            raw = subprocess.check_output(
+                cmd,
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=4.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raw = ""
+        if raw.strip():
+            break
+    if not raw:
         return tip
 
     local_block = local_slot = None
@@ -182,26 +219,32 @@ def _journal_tip() -> Dict[str, Any]:
                     tx_count = int(fields["tx_count"])
                 except (TypeError, ValueError):
                     pass
-        elif msg == "chainsync.roll_forward_done":
-            cur = fields.get("current")
-            nt = fields.get("highest") or fields.get("tip")
-            if isinstance(cur, list) and cur:
-                try:
-                    local_slot = int(cur[0])
-                    if len(cur) > 2:
-                        local_block = int(cur[2])
-                except (TypeError, ValueError):
-                    pass
-            if isinstance(nt, list) and len(nt) > 2:
-                try:
-                    net_block = int(nt[2])
-                except (TypeError, ValueError):
-                    pass
+        elif msg in (
+            "chainsync.roll_forward_done",
+            "chainsync.intersect_found",
+            "chainsync.roll_backward",
+        ):
+            s_slot, s_block = _point_block_slot(fields.get("current"))
+            if s_slot is not None:
+                local_slot = s_slot
+            if s_block is not None:
+                local_block = s_block
+            _n_slot, n_block = _point_block_slot(
+                fields.get("highest") or fields.get("tip")
+            )
+            if n_block is not None:
+                net_block = n_block
             if fields.get("tip_height") is not None:
                 try:
                     net_block = int(fields["tip_height"])
                 except (TypeError, ValueError):
                     pass
+        elif msg in ("chain.tip_accepted", "chain.best_tip_candidate"):
+            s_slot, s_block = _point_block_slot(fields.get("tip"))
+            if s_slot is not None:
+                local_slot = s_slot
+            if s_block is not None:
+                local_block = s_block
 
     tip["slot"] = local_slot
     tip["block_no"] = local_block
@@ -212,6 +255,8 @@ def _journal_tip() -> Dict[str, Any]:
         tip["phase"] = (
             "on_tip" if tip["gap_blocks"] <= ON_TIP_GAP else "catching_up"
         )
+    elif local_block is not None or local_slot is not None:
+        tip["phase"] = "on_tip"
     return tip
 
 
@@ -336,14 +381,19 @@ class NodeOled:
             net = run.get("network_tip") or {}
             if net.get("block_no") is not None:
                 tip["network_block"] = net.get("block_no")
-        # Recompute on-tip with OLED tolerance (helper may still say catching_up).
+        # Recompute on-tip with OLED tolerance. Do not inherit helper "starting"
+        # once the service is active (common after reboot while journals settle).
         gap = tip.get("gap_blocks")
         if gap is not None:
             tip["phase"] = "on_tip" if int(gap) <= ON_TIP_GAP else "catching_up"
+        elif tip.get("phase") in ("on_tip", "catching_up"):
+            pass
         elif run.get("phase") in ("on_tip", "near_tip"):
             tip["phase"] = "on_tip"
-        elif run.get("phase"):
-            tip["phase"] = run.get("phase")
+        elif run.get("phase") == "catching_up":
+            tip["phase"] = "catching_up"
+        elif local.get("service_active") == "active":
+            tip["phase"] = tip.get("phase") or "running"
         return {
             "load": (load1, load5, load15),
             "cores": self._core_pct(),
@@ -375,20 +425,20 @@ class NodeOled:
             return "Bootstrap", str(line), "Amaru"
         if local.get("service_active") == "active":
             gap = tip.get("gap_blocks")
-            if tip.get("phase") == "on_tip" or (
-                gap is not None and int(gap) <= ON_TIP_GAP
-            ):
-                # Small gaps are normal; confirm health instead of alarming.
+            phase = tip.get("phase")
+            # Never show Catch-up without a measured gap (post-reboot DEBUG flood
+            # used to leave tip empty and falsely said "Catch-up / syncing").
+            if phase == "on_tip" or (gap is not None and int(gap) <= ON_TIP_GAP):
                 if gap is None or int(gap) == 0:
                     sub = "synced"
                 else:
                     sub = f"ok Δ{int(gap)}"
                 return "On tip", sub, "Amaru"
-            return (
-                "Catch-up",
-                (f"−{int(gap)} blk" if gap is not None else "syncing"),
-                "Amaru",
-            )
+            if gap is not None and int(gap) > ON_TIP_GAP:
+                return "Catch-up", f"−{int(gap)} blk", "Amaru"
+            if tip.get("block_no") is not None:
+                return "Running", f"block {tip.get('block_no')}", "Amaru"
+            return "Running", "tip pending…", "Amaru"
         if local.get("installed"):
             if local.get("db_present") or local.get("bootstrap_done"):
                 return "Ready", "Start Amaru", "Amaru"

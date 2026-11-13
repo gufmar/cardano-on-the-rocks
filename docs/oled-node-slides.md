@@ -17,8 +17,13 @@ the static gear screen and rotates a short carousel (~3.5 s per slide).
 ## Tip tolerance
 
 Gaps of **≤ 300** blocks (or slots from the helper) count as **on tip**. The OLED
-shows `synced` / `ok ΔN` instead of alarming. Catch-up only appears when further
-behind. Progress titles omit wizard step numbers (`On tip`, not `3.3 On tip`).
+shows `synced` / `ok ΔN` instead of alarming. Catch-up only appears when a measured
+gap is **> 300**. If the service is active but tip journals are still settling
+(common after reboot when DEBUG floods drown `tip.adopt`), the UI says **Running**
+instead of a false Catch-up.
+
+Tip projection also reads `chainsync.intersect_found` / `roll_backward` (not only
+`tip.adopt` / `roll_forward_done`), via filtered `journalctl --grep`.
 
 Public watch page: `http://<board>:8080/status` (API `/api/v1/watch/node`, no auth).
 

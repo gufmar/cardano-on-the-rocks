@@ -436,19 +436,54 @@ if unit_state != "active":
     print(json.dumps(out))
     raise SystemExit(0)
 
-try:
-    raw = subprocess.check_output(
-        ["journalctl", "-u", unit, "-n", "800", "-o", "cat", "--no-pager"],
-        text=True,
-        stderr=subprocess.DEVNULL,
-    )
-except Exception:
-    raw = ""
+# Prefer tip-related INFO lines. Plain -n 800 is drowned by DEBUG enter/exit after reboot.
+raw = ""
+for cmd in (
+    [
+        "journalctl",
+        "-u",
+        unit,
+        "-n",
+        "1500",
+        "-o",
+        "cat",
+        "--no-pager",
+        "--grep",
+        r"tip\.(adopt|update)|chainsync\.(roll_forward_done|intersect_found|roll_backward)|chain\.(tip_accepted|best_tip_candidate)",
+    ],
+    [
+        "journalctl",
+        "-u",
+        unit,
+        "-n",
+        "400",
+        "-p",
+        "info..alert",
+        "-o",
+        "cat",
+        "--no-pager",
+    ],
+):
+    try:
+        chunk = subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        chunk = ""
+    if chunk.strip():
+        raw = chunk
+        break
+if not raw:
+    try:
+        raw = subprocess.check_output(
+            ["journalctl", "-u", unit, "-n", "1200", "-o", "cat", "--no-pager"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        raw = ""
 
 # Local adopted tip vs peer-advertised network tip must not be mixed.
-# tip.adopt.max_block_height and chain.tip_accepted.tip are LOCAL chain tips.
-# Peer network tip comes from chainsync.roll_forward_done tip/highest/tip_height
-# (and peer tip fields that sit clearly ahead of local).
+# tip.adopt / tip.update / chain.tip_accepted are LOCAL.
+# chainsync.intersect_found / roll_backward / roll_forward_done: current=local, highest/tip=network.
 local = None
 net = None
 headers_max = None  # tip.adopt max_block_height (headers ahead of adopted)
@@ -462,6 +497,8 @@ interesting = {
     "block.adopted",
     "block.received",
     "chainsync.roll_forward_done",
+    "chainsync.intersect_found",
+    "chainsync.roll_backward",
     "header.announced",
     "chain.tip_accepted",
     "chain.best_tip_candidate",
@@ -551,7 +588,11 @@ for line in raw.splitlines():
     elif name in ("chain.tip_accepted", "chain.best_tip_candidate"):
         # Their "tip" field is the local chain tip, not the peer network tip.
         local = better_tip(local, as_local(pt=point_tuple(fields.get("tip")), header_hash=hh))
-    elif name == "chainsync.roll_forward_done":
+    elif name in (
+        "chainsync.roll_forward_done",
+        "chainsync.intersect_found",
+        "chainsync.roll_backward",
+    ):
         cur = point_tuple(fields.get("current"))
         if fields.get("current_height") is not None and cur:
             try:
@@ -593,8 +634,12 @@ for line in raw.splitlines():
         tip_pt = point_tuple(fields.get("tip"))
         if tip_pt and tip_pt.get("block_no") is not None:
             local_block = (local or {}).get("block_no")
-            # Only accept as network tip when clearly ahead of adopted local.
-            if local_block is None or tip_pt["block_no"] > int(local_block) + 5000:
+            # Peer tip on roll_forward spans: always track as network tip when
+            # we already know local, or when it is clearly ahead. Never invent
+            # "catch-up" from peer tip alone with local still unknown.
+            if local_block is not None and tip_pt["block_no"] >= int(local_block):
+                net = better_tip(net, tip_pt)
+            elif local_block is None and tip_pt["block_no"] is not None:
                 net = better_tip(net, tip_pt)
 
     if name in interesting:
@@ -649,11 +694,18 @@ out["recent"] = recent[-8:]
 
 if local and (local.get("slot") is not None or local.get("block_no") is not None):
     # RockPi demos: treat small gaps as on tip (chainsync jitter / slot lag).
-    on_tip = False
+    # If we have a local tip but no peer tip sample, prefer on_tip over a false catch-up.
+    on_tip = gap_blocks is None and gap_slots is None
     if gap_blocks is not None and gap_blocks <= 300:
         on_tip = True
     if gap_slots is not None and gap_slots <= 300:
         on_tip = True
+    if gap_blocks is not None and gap_blocks > 300:
+        on_tip = False
+    if gap_slots is not None and gap_slots > 300 and (
+        gap_blocks is None or gap_blocks > 300
+    ):
+        on_tip = False
     out["phase"] = "on_tip" if on_tip else "catching_up"
     bits = []
     if local.get("slot") is not None:
